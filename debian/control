@@ -1,7 +1,8 @@
 Source: collectd
 Section: utils
 Priority: optional
-Maintainer: Sebastian Harl <tokkee@debian.org>
+Maintainer: Pexip AS <packaging@pexip.com>
+XSBC-Pexip-Original-Maintainer: Sebastian Harl <tokkee@debian.org>
 Build-Depends: debhelper (>= 5), dpkg-dev (>= 1.14.10), po-debconf, dpatch,
  bison, flex, autotools-dev, libltdl-dev, pkg-config,
  iptables-dev (>= 1.4.3.2-2) [linux-any],
@@ -50,6 +51,7 @@ Standards-Version: 3.9.5
 Homepage: http://collectd.org/
 Vcs-Git: git://git.tokkee.org/pkg-collectd.git
 Vcs-Browser: http://git.tokkee.org/?p=pkg-collectd.git
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ jessie
 
 Package: collectd-core
 Architecture: any

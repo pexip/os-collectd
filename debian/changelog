@@ -1,3 +1,9 @@
+collectd (5.4.1-6+deb8u1pexip1) pexip; urgency=medium
+
+  * Prepare Pexip packaging
+
+ -- John-Mark Bell <jmb@pexip.com>  Tue, 30 Jan 2018 15:51:12 +0000
+
 collectd (5.4.1-6+deb8u1) jessie-security; urgency=high
 
   * debian/patches/CVE-2016-6254.dpatch: Fix heap overflow in the network
