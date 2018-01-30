@@ -23,7 +23,7 @@ CFLAGS += -Wall -Wno-error=deprecated-declarations
 # however required by the perl plugin (which would otherwise be unable to find
 # symbols defined in libperl when loading perl modules that require such
 # symbols). This is a workaround for this issue.
-CPPFLAGS += -DLT_LAZY_OR_NOW='RTLD_LAZY|RTLD_GLOBAL'
+#CPPFLAGS += -DLT_LAZY_OR_NOW='RTLD_LAZY|RTLD_GLOBAL'
 
 # Upstream defaults to ${sysconfdir}/collectd.conf. Setting ${sysconfdir} to
 # /etc/collectd would be wrong though.
@@ -166,6 +166,67 @@ ifneq (,$(filter hppa sparc, $(DEB_BUILD_ARCH)))
 	confflags += --disable-java
 endif
 
+# Disable unwanted plugins on pexos
+confflags += \
+		--disable-aggregation \
+		--disable-amqp \
+		--disable-apache \
+		--disable-apcups \
+		--disable-ascent \
+		--disable-battery \
+		--disable-bind \
+		--disable-csv \
+		--disable-curl \
+		--disable-curl_json \
+		--disable-curl_xml \
+		--disable-dbi \
+		--disable-dns \
+		--disable-email \
+		--disable-exec \
+		--disable-filecount \
+		--disable-fscache \
+		--disable-gmond \
+		--disable-hddtemp \
+		--disable-ipmi \
+		--disable-ipvs \
+		--disable-java \
+		--disable-libvirt \
+		--disable-logfile \
+		--disable-madwifi \
+		--disable-mbmon \
+		--disable-memcachec \
+		--disable-memcached \
+		--disable-modbus \
+		--disable-multimeter \
+		--disable-mysql \
+		--disable-network \
+		--disable-nfs \
+		--disable-nginx \
+		--disable-notify_desktop \
+		--disable-notify_email \
+		--disable-nut \
+		--disable-olsrd \
+		--disable-onewire \
+		--disable-openvpn \
+		--disable-perl \
+		--disable-pinba \
+		--disable-postgresql \
+		--disable-powerdns \
+		--disable-python \
+		--disable-rrdcached \
+		--disable-sensors \
+		--disable-serial \
+		--disable-snmp \
+		--disable-teamspeak2 \
+		--disable-ted \
+		--disable-thermal \
+		--disable-tokyotyrant \
+		--disable-unixsock \
+		--disable-vserver \
+		--disable-wireless \
+		--disable-write_http \
+		--disable-write_riemann
+
 config.status: configure $(DPATCH_STAMPFN)
 	dh_testdir
 	
@@ -176,10 +237,10 @@ config.status: configure $(DPATCH_STAMPFN)
 		fi; done )
 	
 	# This is a work-around for #474087 (broken openipmi .pc files).
-	mkdir debian/pkgconfig
-	sed -re 's/^(Requires:.*) pthread(.*)$$/\1\2/' \
-		/usr/lib/pkgconfig/OpenIPMIpthread.pc \
-		> debian/pkgconfig/OpenIPMIpthread.pc
+	#mkdir debian/pkgconfig
+	#sed -re 's/^(Requires:.*) pthread(.*)$$/\1\2/' \
+	#	/usr/lib/pkgconfig/OpenIPMIpthread.pc \
+	#	> debian/pkgconfig/OpenIPMIpthread.pc
 	
 	PKG_CONFIG_PATH="$(CURDIR)/debian/pkgconfig:$$PKG_CONFIG_PATH" \
 	./configure $(confflags) CPPFLAGS="$(CPPFLAGS)" CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)" \
