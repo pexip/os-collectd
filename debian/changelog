@@ -1,3 +1,10 @@
+collectd (5.4.1-6+deb8u1pexip2) pexip; urgency=medium
+
+  * debian/collectd.conf: Disable all plugins (except syslog) by default.
+    Increase frequency to 1Hz. Force hostname to "localhost".
+
+ -- John-Mark Bell <jmb@pexip.com>  Thu, 05 Jul 2018 11:59:50 +0100
+
 collectd (5.4.1-6+deb8u1pexip1) pexip; urgency=medium
 
   * Prepare Pexip packaging
