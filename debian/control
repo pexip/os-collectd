@@ -51,7 +51,7 @@ Standards-Version: 3.9.5
 Homepage: http://collectd.org/
 Vcs-Git: git://git.tokkee.org/pkg-collectd.git
 Vcs-Browser: http://git.tokkee.org/?p=pkg-collectd.git
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ jessie
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ stretch
 
 Package: collectd-core
 Architecture: any
