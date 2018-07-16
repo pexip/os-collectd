@@ -190,30 +190,42 @@ confflags += \
 		--disable-apache \
 		--disable-apcups \
 		--disable-ascent \
+		--disable-barometer \
 		--disable-battery \
 		--disable-bind \
+		--disable-ceph \
+		--disable-chrony \
+		--disable-cpusleep \
 		--disable-csv \
 		--disable-curl \
 		--disable-curl_json \
 		--disable-curl_xml \
 		--disable-dbi \
 		--disable-dns \
+		--disable-dpdkstat \
+		--disable-drbd \
 		--disable-email \
 		--disable-exec \
+		--disable-fhcount \
 		--disable-filecount \
 		--disable-fscache \
 		--disable-gmond \
+		--disable-gps \
 		--disable-hddtemp \
+		--disable-hugepages \
+		--disable-ipc \
 		--disable-ipmi \
 		--disable-ipvs \
 		--disable-java \
-		--disable-libvirt \
 		--disable-logfile \
+		--disable-log_logstash \
+		--disable-lua \
 		--disable-madwifi \
 		--disable-mbmon \
 		--disable-memcachec \
 		--disable-memcached \
 		--disable-modbus \
+		--disable-mqtt \
 		--disable-multimeter \
 		--disable-mysql \
 		--disable-network \
@@ -221,28 +233,44 @@ confflags += \
 		--disable-nginx \
 		--disable-notify_desktop \
 		--disable-notify_email \
+		--disable-notify_nagios \
 		--disable-nut \
 		--disable-olsrd \
 		--disable-onewire \
+		--disable-openldap \
 		--disable-openvpn \
 		--disable-perl \
 		--disable-pinba \
 		--disable-postgresql \
 		--disable-powerdns \
 		--disable-python \
+		--disable-redis \
 		--disable-rrdcached \
 		--disable-sensors \
 		--disable-serial \
+		--disable-sigrok \
+		--disable-smart \
 		--disable-snmp \
 		--disable-teamspeak2 \
 		--disable-ted \
 		--disable-thermal \
 		--disable-tokyotyrant \
+		--disable-turbostat \
 		--disable-unixsock \
+		--disable-varnish \
 		--disable-vserver \
+		--disable-virt \
 		--disable-wireless \
 		--disable-write_http \
-		--disable-write_riemann
+		--disable-write_kafka \
+		--disable-write_log \
+		--disable-write_prometheus \
+		--disable-write_redis \
+		--disable-write_riemann \
+		--disable-write_sensu \
+		--disable-write_tsdb \
+		--disable-xencpu \
+		--disable-zookeeper
 
 build: build-arch build-indep
 build-arch: build-stamp
