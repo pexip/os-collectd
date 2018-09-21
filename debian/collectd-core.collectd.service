@@ -1,6 +1,6 @@
 [Unit]
 Description=Statistics collection and monitoring daemon
-After=local-fs.target network.target
+After=local-fs.target network.target carbon-cache.service
 Requires=local-fs.target network.target
 ConditionPathExists=/etc/collectd/collectd.conf
 Documentation=man:collectd(1)

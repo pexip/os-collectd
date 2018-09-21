@@ -1,3 +1,9 @@
+collectd (5.7.1-1.1pexip2) pexip; urgency=medium
+
+  * debian/collectd-core.collectd.init.d: start after carbon-cache
+
+ -- John-Mark Bell <jmb@pexip.com>  Mon, 24 Sep 2018 15:23:29 +0100
+
 collectd (5.7.1-1.1pexip1) pexip; urgency=medium
 
   * Migrate to Stretch
