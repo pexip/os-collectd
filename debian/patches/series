@@ -6,3 +6,4 @@ mqtt_resource_leak.patch
 mqtt_invalid_symbols.patch
 dpdkstat_goto_label.patch
 drop_lssl_lcrypto_from_linking.patch
+disk_support_kernels_with_additional_fields.patch

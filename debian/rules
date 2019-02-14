@@ -185,7 +185,6 @@ endif
 
 # Disable unwanted plugins on pexos
 confflags += \
-		--disable-aggregation \
 		--disable-amqp \
 		--disable-apache \
 		--disable-apcups \

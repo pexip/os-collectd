@@ -1,3 +1,9 @@
+collectd (5.7.1-1.1pexip3) pexip; urgency=medium
+
+  * Support kernels with additional fields (taken from https://github.com/collectd/collectd/pull/2952 )
+
+ -- Ben Hockley <ben@pexip.com>  Thu, 14 Feb 2019 15:11:29 +0100
+
 collectd (5.7.1-1.1pexip2) pexip; urgency=medium
 
   * debian/collectd-core.collectd.init.d: start after carbon-cache
