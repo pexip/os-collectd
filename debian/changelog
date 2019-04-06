@@ -1,3 +1,201 @@
+collectd (5.8.1-1.3) unstable; urgency=medium
+
+  * Non-maintainer upload.
+
+  [ Jonathan McDowell ]
+  * Re-enable mqtt + varnish plugins. (Closes: #924337)
+
+  [ Chris Hofstaedtler ]
+  * Apply Jonathan's patch and upload it.
+
+ -- Chris Hofstaedtler <zeha@debian.org>  Sat, 06 Apr 2019 12:21:09 +0000
+
+collectd (5.8.1-1.2) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Backport removed_checks_for_upper_limit_of_SENSORS_API.patch from
+    the upstream 5.8 release branch to fix build with libsensors5.
+    (Closes: #917202)
+
+ -- Luca Boccassi <bluca@debian.org>  Tue, 25 Dec 2018 12:08:23 +0100
+
+collectd (5.8.1-1.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Stop building lvm plugin and remove dependency from liblvm2-dev,
+    which is deprecated.
+    (Closes: #915692)
+  * Backport dpdk_configure_check.patch from the upstream 5.8 release
+    branch to fix build with DPDK 18.11.
+    (Closes: #915419)
+
+ -- Luca Boccassi <bluca@debian.org>  Wed, 19 Dec 2018 15:52:36 +0100
+
+collectd (5.8.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * debian/patches:
+    - Remove rd_kafka_last_error.patch; applied upstream.
+  * debian/control:
+    - Bump standards version to 4.2.1; no changes.
+  * debian/rules:
+    - Fix cross building: de-confuse build/host; thanks to Helmut Grohne for
+      reporting this and providing a patch (Closes: #913668).
+    - Disable mqtt plugin until #911265, #911266 get fixed.
+
+ -- Sebastian Harl <tokkee@debian.org>  Fri, 23 Nov 2018 00:01:43 +0100
+
+collectd (5.8.0-5.2) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Fix "ftbfs with GCC-8":
+    debian/rules: build with -Wno-error=format-truncation as a temporary
+    workaround for the build failure with gcc-8 caused by a compiler warning.
+    (Closes: #897724)
+
+ -- gregor herrmann <gregoa@debian.org>  Mon, 06 Aug 2018 20:43:05 +0200
+
+collectd (5.8.0-5.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Fix "FTBFS: sed: can't read /usr/lib/pkgconfig/OpenIPMIpthread.pc:
+    No such file or directory":
+    Drop hack for broken OpenIPMIpthread.pc from debian/rules; apparently the
+    problem in #474087 was fixed in 2010.
+    (Closes: #900232)
+
+ -- gregor herrmann <gregoa@debian.org>  Fri, 29 Jun 2018 19:42:43 +0200
+
+collectd (5.8.0-5) unstable; urgency=medium
+
+  * debian/rules:
+    - remove legacy libtool1 build option, as support got dropped in collectd
+      5.8.
+    - disable varnish plugin until #879471 gets fixed.
+  * debian/control:
+    - Bump Standards-Version to 4.1.4.
+
+ -- Marc Fournier <marc@bl.uem.li>  Fri, 04 May 2018 16:52:07 +0200
+
+collectd (5.8.0-4) unstable; urgency=medium
+
+  * debian/rules:
+    - Fix the arch selection for enabling the gRPC plugin. By accident, we
+      disabled it for exactly the wrong archs. Thanks to Adrian Bunk for
+      reporting this! (Closes: #892166)
+
+ -- Sebastian Harl <tokkee@debian.org>  Tue, 06 Mar 2018 22:19:38 +0100
+
+collectd (5.8.0-3) unstable; urgency=medium
+
+  * debian/control:
+    - Limit libgrpc++-dev and protobuf-compiler-grpc Build-depend to supported
+      platforms.
+    - Bump Standards-Version to 4.1.3.
+
+ -- Marc Fournier <marc@bl.uem.li>  Mon, 05 Mar 2018 22:48:34 +0100
+
+collectd (5.8.0-2) unstable; urgency=medium
+
+  * debian/control: Limit intel-cmt-cat Build-depend to intel architectures;
+    thanks to Adrian Bunk for reporting this. (Closes: #891673)
+
+ -- Marc Fournier <marc@bl.uem.li>  Wed, 28 Feb 2018 10:06:58 +0100
+
+collectd (5.8.0-1) unstable; urgency=medium
+
+  [ Marc Fournier ]
+  * New upstream release. (Closes: #887093, #881757, CVE-2017-16820)
+  * New plugins:
+    - DPDK link status and keep alive events: dpdkevents
+    - Intel performance counters: intel_pmu (disabled in Debian because of
+      missing dependencies)
+    - Machine Check Exceptions notifications: mcelog
+    - Open vSwitch link state events: ovs_events
+    - Open vSwitch bridge / interface statistics: ovs_stats
+    - receive and handle queries from SNMP master agent: snmp_agent
+    - synproxy statistics: synproxy (Linux-specific)
+  * Enable the grpc plugin, libgrpc++ is now available.
+  * Enable the intel_rdt plugin, libpqos is now available.
+  * Re-enable the varnish plugin, support for varnish 5.2 now implemented.
+  * debian/control:
+    - Build-depend on libgrpc++-dev, libprotobuf-dev, protobuf-compiler,
+      protobuf-compiler-grpc: Needed by the grpc plugin.
+    - Build-depend on intel-cmt-cat: Needed by the intel_rdt plugin.
+  * debian/rules:
+    - Disable the intel_pmu plugin.
+    - Disable the synproxy plugin on non-Linux architectures.
+    - Disable the dpdkevents, intel_pmu, intel_rdt, mcelog and mic plugins on
+      non-Intel architectures.
+  * debian/patches:
+    - Added i2c_detection.patch; needed to build against libi2c-4.0. Thanks to
+      Christian Ehrhardt for reporting this problem and Andreas Hasenack for
+      providing a patch. (Closes: #886920)
+    - Added liblvm2app_depreciation_warning.patch; allows the plugin to build
+      despite liblvm2app depreciation. Thanks to Christian Ehrhardt for
+      suggesting this workaround. (Closes: #881641)
+    - Added rd_kafka_last_error.patch; needed to build against
+      librdkafka-0.11.0. Thanks to Pavel Rochnyack for providing a patch.
+    - Removed dpdk-pkg-config.patch; included upstream.
+    - Removed libcollectdclient_error_buffer.patch; included upstream.
+    - Removed local-msr-index-h.patch; included upstream.
+    - Removed write_mongodb.patch; included upstream.
+  * debian/libcollectdclient-dev.install:
+    - Install new server and parsing header files.
+  * debian/libcollectdclient1.symbols
+    - Updated for 5.8.
+
+  [ Sebastian Harl ]
+  * debian/control:
+    - Depend on libi2c-dev (>= 4.0~); that's required for the i2c detection
+      patch which breaks the build with earlier versions. Both changes can
+      easily be reverted, e.g. for backporting.
+
+ -- Sebastian Harl <tokkee@debian.org>  Tue, 27 Feb 2018 20:44:03 +0100
+
+collectd (5.7.2-2) unstable; urgency=medium
+
+  [ Luca Boccassi ]
+  * debian/patches:
+    - Add dpdk-pkg-config.patch: Backport upstream patch to build DPDK with
+      pkg-config. This allows DPDK in Debian to fix an upstream multi-arch
+      issue, where arch-dependents headers are installed in /usr/include
+      breaking multi-arch co-installability of libdpdk-dev. (Closes: #872482)
+
+  [ Sebastian Harl ]
+  * Disable the sigrok plugin for now; it's not compatible with libsigrok4;
+    thanks to Adrian Bunk for reporting this (Closes: #878348).
+  * Enable the write_mongodb plugin, libmongoc is now available. Thanks to
+    Saikrishna Arcot for reporting this (Closes: #858315).
+    - Add write_mongodb.patch to update the plugin to the most recent upstream
+      version to bring it up to date with Debian's libmongoc and fix some
+      other issues.
+  * Update to standards-version 4.1.1:
+    - Build depend on debhelper (>= 9.20160709~) instead of dh-systemd.
+    - Use priority "optional" instead of deprecated priority "extra".
+  * Disable the varnish plugin for now. collectd FTBFS against varnish 5.2.
+    Cf. https://github.com/collectd/collectd/issues/2498 and #879471.
+
+ -- Sebastian Harl <tokkee@debian.org>  Sun, 22 Oct 2017 00:37:19 +0200
+
+collectd (5.7.2-1) unstable; urgency=medium
+
+  * New upstream release.
+    - Fix potential endless-loop in the network plugin, which can be triggered
+      remotely by sending a crafted UDP packet (Closes: #859494,
+      CVE-2017-7401).
+  * debian/patches:
+    - drop dpdkstat_goto_label.patch; included upstream.
+    - drop drop_lssl_lcrypto_from_linking.patch; included upstream.
+    - drop mqtt_invalid_symbols.patch; included upstream.
+    - drop mqtt_resource_leak.patch; included upstream.
+    - add libcollectdclient_error_buffer.patch, fixing a build error with
+      GCC 7 (Closes: #871062). Thanks to Steve Langasek and Ruben Kerkhof.
+    - add local-msr-index-h.patch, bundling a header file removed from 4.12+
+      kernels (Closes: #872276). Thanks to Steve Langasek.
+
+ -- Marc Fournier <marc@bl.uem.li>  Wed, 23 Aug 2017 18:10:47 +0200
+
 collectd (5.7.1-1.1) unstable; urgency=medium
 
   * Non-maintainer upload.
