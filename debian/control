@@ -69,7 +69,7 @@ Standards-Version: 3.9.8
 Homepage: https://collectd.org/
 Vcs-Git: https://github.com/collectd/pkg-debian.git
 Vcs-Browser: https://github.com/collectd/pkg-debian.git
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ stretch
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ buster
 
 Package: collectd-core
 Architecture: any
