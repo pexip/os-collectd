@@ -26,10 +26,10 @@
  *   Marc Fournier <marc.fournier at camptocamp.com>
  **/
 
+#include "collectd.h"
 #include "common.h"
 #include "plugin.h"
 #include "utils_time.h"
-#include "collectd.h"
 
 #define CGPS_TRUE 1
 #define CGPS_FALSE 0
@@ -80,7 +80,7 @@ static int cgps_thread_pause(cdtime_t pTime) {
 
   int ret = !cgps_thread_shutdown;
 
-  pthread_mutex_lock(&cgps_thread_lock);
+  pthread_mutex_unlock(&cgps_thread_lock);
   return ret;
 }
 
@@ -226,7 +226,7 @@ static int cgps_read(void) {
   cgps_submit("satellites", data_copy.sats_used, "used");
   cgps_submit("satellites", data_copy.sats_visible, "visible");
 
-  return (0);
+  return 0;
 }
 
 /**
@@ -262,7 +262,7 @@ static int cgps_config(oconfig_item_t *ci) {
     cgps_config_data.timeout = CGPS_DEFAULT_TIMEOUT;
   }
 
-  return (0);
+  return 0;
 }
 
 /**
@@ -286,10 +286,10 @@ static int cgps_init(void) {
       plugin_thread_create(&cgps_thread_id, NULL, cgps_thread, NULL, "gps");
   if (status != 0) {
     ERROR("gps plugin: pthread_create() failed.");
-    return (-1);
+    return -1;
   }
 
-  return (0);
+  return 0;
 }
 
 /**
@@ -307,7 +307,6 @@ static int cgps_shutdown(void) {
   free(res);
 
   // Clean mutex:
-  pthread_mutex_unlock(&cgps_thread_lock);
   pthread_mutex_destroy(&cgps_thread_lock);
   pthread_mutex_unlock(&cgps_data_lock);
   pthread_mutex_destroy(&cgps_data_lock);
@@ -315,7 +314,7 @@ static int cgps_shutdown(void) {
   sfree(cgps_config_data.port);
   sfree(cgps_config_data.host);
 
-  return (0);
+  return 0;
 }
 
 /**

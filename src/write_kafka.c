@@ -77,6 +77,14 @@ static void kafka_log(const rd_kafka_t *rkt, int level, const char *fac,
 }
 #endif
 
+static rd_kafka_resp_err_t kafka_error() {
+#if RD_KAFKA_VERSION >= 0x000b00ff
+  return rd_kafka_last_error();
+#else
+  return rd_kafka_errno2err(errno);
+#endif
+}
+
 static uint32_t kafka_hash(const char *keydata, size_t keylen) {
   uint32_t hash = 5381;
   for (; keylen > 0; keylen--)
@@ -89,7 +97,7 @@ static uint32_t kafka_hash(const char *keydata, size_t keylen) {
 #define KAFKA_RANDOM_KEY_BUFFER                                                \
   (char[KAFKA_RANDOM_KEY_SIZE]) { "" }
 static char *kafka_random_key(char buffer[static KAFKA_RANDOM_KEY_SIZE]) {
-  ssnprintf(buffer, KAFKA_RANDOM_KEY_SIZE, "%08" PRIX32, cdrand_u());
+  snprintf(buffer, KAFKA_RANDOM_KEY_SIZE, "%08" PRIX32, cdrand_u());
   return buffer;
 }
 
@@ -113,12 +121,12 @@ static int kafka_handle(struct kafka_topic_context *ctx) /* {{{ */
   rd_kafka_topic_conf_t *topic_conf;
 
   if (ctx->kafka != NULL && ctx->topic != NULL)
-    return (0);
+    return 0;
 
   if (ctx->kafka == NULL) {
     if ((conf = rd_kafka_conf_dup(ctx->kafka_conf)) == NULL) {
       ERROR("write_kafka plugin: cannot duplicate kafka config");
-      return (1);
+      return 1;
     }
 
     if ((ctx->kafka = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errbuf,
@@ -147,7 +155,7 @@ static int kafka_handle(struct kafka_topic_context *ctx) /* {{{ */
     if ((ctx->topic = rd_kafka_topic_new(ctx->kafka, ctx->topic_name,
                                          topic_conf)) == NULL) {
       ERROR("write_kafka plugin: cannot create topic : %s\n",
-            rd_kafka_err2str(rd_kafka_errno2err(errno)));
+            rd_kafka_err2str(kafka_error()));
       return errno;
     }
 
@@ -158,7 +166,7 @@ static int kafka_handle(struct kafka_topic_context *ctx) /* {{{ */
          rd_kafka_topic_name(ctx->topic));
   }
 
-  return (0);
+  return 0;
 
 } /* }}} int kafka_handle */
 
@@ -398,8 +406,8 @@ static void kafka_config_topic(rd_kafka_conf_t *conf,
   rd_kafka_topic_conf_set_partitioner_cb(tctx->conf, kafka_partition);
   rd_kafka_topic_conf_set_opaque(tctx->conf, tctx);
 
-  ssnprintf(callback_name, sizeof(callback_name), "write_kafka/%s",
-            tctx->topic_name);
+  snprintf(callback_name, sizeof(callback_name), "write_kafka/%s",
+           tctx->topic_name);
 
   status = plugin_register_write(
       callback_name, kafka_write,
@@ -481,7 +489,7 @@ static int kafka_config(oconfig_item_t *ci) /* {{{ */
   }
   if (conf != NULL)
     rd_kafka_conf_destroy(conf);
-  return (0);
+  return 0;
 errout:
   if (conf != NULL)
     rd_kafka_conf_destroy(conf);
