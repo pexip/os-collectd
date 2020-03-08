@@ -1,3 +1,11 @@
+collectd (5.8.1-1.3pexip1) pexip; urgency=medium
+
+  * Migrate to Buster
+  * Remove patch applied upstream:
+    disk_support_kernels_with_additional_fields.patch
+
+ -- Vincent Sanders <vince@pexip.com>  Sun, 08 Mar 2020 21:06:02 +0000
+
 collectd (5.8.1-1.3) unstable; urgency=medium
 
   * Non-maintainer upload.

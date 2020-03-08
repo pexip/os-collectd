@@ -6,5 +6,3 @@ i2c_detection.patch
 liblvm2app_depreciation_warning.patch
 dpdk_configure_check.patch
 removed_checks_for_upper_limit_of_SENSORS_API.patch
-
-disk_support_kernels_with_additional_fields.patch
