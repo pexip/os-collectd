@@ -208,6 +208,7 @@ confflags += \
 		--disable-curl_xml \
 		--disable-dbi \
 		--disable-dns \
+		--disable-dpdkevents \
 		--disable-dpdkstat \
 		--disable-drbd \
 		--disable-email \
@@ -217,6 +218,7 @@ confflags += \
 		--disable-fscache \
 		--disable-gmond \
 		--disable-gps \
+		--disable-grpc \
 		--disable-hddtemp \
 		--disable-hugepages \
 		--disable-ipc \
@@ -242,6 +244,8 @@ confflags += \
 		--disable-notify_nagios \
 		--disable-nut \
 		--disable-olsrd \
+		--disable-ovs_events \
+		--disable-ovs_stats \
 		--disable-onewire \
 		--disable-openldap \
 		--disable-openvpn \
@@ -257,6 +261,7 @@ confflags += \
 		--disable-sigrok \
 		--disable-smart \
 		--disable-snmp \
+		--disable-snmp_agent \
 		--disable-teamspeak2 \
 		--disable-ted \
 		--disable-thermal \
@@ -270,6 +275,7 @@ confflags += \
 		--disable-write_http \
 		--disable-write_kafka \
 		--disable-write_log \
+		--disable-write_mongodb \
 		--disable-write_prometheus \
 		--disable-write_redis \
 		--disable-write_riemann \
