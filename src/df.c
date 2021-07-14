@@ -23,10 +23,10 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
-#include "utils_ignorelist.h"
-#include "utils_mount.h"
+#include "utils/common/common.h"
+#include "utils/ignorelist/ignorelist.h"
+#include "utils/mount/mount.h"
 
 #if HAVE_STATVFS
 #if HAVE_SYS_STATVFS_H
@@ -47,18 +47,21 @@
 #endif
 
 static const char *config_keys[] = {
-    "Device",         "MountPoint",   "FSType",         "IgnoreSelected",
-    "ReportByDevice", "ReportInodes", "ValuesAbsolute", "ValuesPercentage"};
+    "Device",         "MountPoint",       "FSType",
+    "IgnoreSelected", "ReportByDevice",   "ReportInodes",
+    "ValuesAbsolute", "ValuesPercentage", "LogOnce"};
 static int config_keys_num = STATIC_ARRAY_SIZE(config_keys);
 
-static ignorelist_t *il_device = NULL;
-static ignorelist_t *il_mountpoint = NULL;
-static ignorelist_t *il_fstype = NULL;
+static ignorelist_t *il_device;
+static ignorelist_t *il_mountpoint;
+static ignorelist_t *il_fstype;
+static ignorelist_t *il_errors;
 
-static _Bool by_device = 0;
-static _Bool report_inodes = 0;
-static _Bool values_absolute = 1;
-static _Bool values_percentage = 0;
+static bool by_device;
+static bool report_inodes;
+static bool values_absolute = true;
+static bool values_percentage;
+static bool log_once;
 
 static int df_init(void) {
   if (il_device == NULL)
@@ -67,6 +70,8 @@ static int df_init(void) {
     il_mountpoint = ignorelist_create(1);
   if (il_fstype == NULL)
     il_fstype = ignorelist_create(1);
+  if (il_errors == NULL)
+    il_errors = ignorelist_create(1);
 
   return 0;
 }
@@ -99,28 +104,35 @@ static int df_config(const char *key, const char *value) {
     return 0;
   } else if (strcasecmp(key, "ReportByDevice") == 0) {
     if (IS_TRUE(value))
-      by_device = 1;
+      by_device = true;
 
     return 0;
   } else if (strcasecmp(key, "ReportInodes") == 0) {
     if (IS_TRUE(value))
-      report_inodes = 1;
+      report_inodes = true;
     else
-      report_inodes = 0;
+      report_inodes = false;
 
     return 0;
   } else if (strcasecmp(key, "ValuesAbsolute") == 0) {
     if (IS_TRUE(value))
-      values_absolute = 1;
+      values_absolute = true;
     else
-      values_absolute = 0;
+      values_absolute = false;
 
     return 0;
   } else if (strcasecmp(key, "ValuesPercentage") == 0) {
     if (IS_TRUE(value))
-      values_percentage = 1;
+      values_percentage = true;
     else
-      values_percentage = 0;
+      values_percentage = false;
+
+    return 0;
+  } else if (strcasecmp(key, "LogOnce") == 0) {
+    if (IS_TRUE(value))
+      log_once = true;
+    else
+      log_once = false;
 
     return 0;
   }
@@ -203,10 +215,17 @@ static int df_read(void) {
       continue;
 
     if (STATANYFS(mnt_ptr->dir, &statbuf) < 0) {
-      char errbuf[1024];
-      ERROR(STATANYFS_STR "(%s) failed: %s", mnt_ptr->dir,
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      if (log_once == false || ignorelist_match(il_errors, mnt_ptr->dir) == 0) {
+        if (log_once == true) {
+          ignorelist_add(il_errors, mnt_ptr->dir);
+        }
+        ERROR(STATANYFS_STR "(%s) failed: %s", mnt_ptr->dir, STRERRNO);
+      }
       continue;
+    } else {
+      if (log_once == true) {
+        ignorelist_remove(il_errors, mnt_ptr->dir);
+      }
     }
 
     if (!statbuf.f_blocks)
@@ -227,12 +246,10 @@ static int df_read(void) {
       if (strcmp(mnt_ptr->dir, "/") == 0)
         sstrncpy(disk_name, "root", sizeof(disk_name));
       else {
-        int len;
-
         sstrncpy(disk_name, mnt_ptr->dir + 1, sizeof(disk_name));
-        len = strlen(disk_name);
+        size_t len = strlen(disk_name);
 
-        for (int i = 0; i < len; i++)
+        for (size_t i = 0; i < len; i++)
           if (disk_name[i] == '/')
             disk_name[i] = '-';
       }

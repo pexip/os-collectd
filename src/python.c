@@ -31,7 +31,7 @@
 
 #include "collectd.h"
 
-#include "common.h"
+#include "utils/common/common.h"
 
 #include "cpython.h"
 
@@ -241,7 +241,7 @@ static char CollectdError_doc[] =
 
 static pthread_t main_thread;
 static PyOS_sighandler_t python_sigint_handler;
-static _Bool do_interactive = 0;
+static bool do_interactive;
 
 /* This is our global thread state. Python saves some stuff in thread-local
  * storage. So if we allow the interpreter to run in the background
@@ -257,8 +257,8 @@ static cpy_callback_t *cpy_init_callbacks;
 static cpy_callback_t *cpy_shutdown_callbacks;
 
 /* Make sure to hold the GIL while modifying these. */
-static int cpy_shutdown_triggered = 0;
-static int cpy_num_callbacks = 0;
+static int cpy_shutdown_triggered;
+static int cpy_num_callbacks;
 
 static void cpy_destroy_user_data(void *data) {
   cpy_callback_t *c = data;
@@ -285,7 +285,7 @@ static void cpy_build_name(char *buf, size_t size, PyObject *callback,
   PyObject *mod = NULL;
 
   if (name != NULL) {
-    snprintf(buf, size, "python.%s", name);
+    ssnprintf(buf, size, "python.%s", name);
     return;
   }
 
@@ -294,14 +294,14 @@ static void cpy_build_name(char *buf, size_t size, PyObject *callback,
     module = cpy_unicode_or_bytes_to_string(&mod);
 
   if (module != NULL) {
-    snprintf(buf, size, "python.%s", module);
+    ssnprintf(buf, size, "python.%s", module);
     Py_XDECREF(mod);
     PyErr_Clear();
     return;
   }
   Py_XDECREF(mod);
 
-  snprintf(buf, size, "python.%p", callback);
+  ssnprintf(buf, size, "python.%p", callback);
   PyErr_Clear();
 }
 
@@ -367,7 +367,7 @@ void cpy_log_exception(const char *context) {
       continue;
 
     if (cpy[strlen(cpy) - 1] == '\n')
-      cpy[strlen(cpy) - 1] = 0;
+      cpy[strlen(cpy) - 1] = '\0';
 
     Py_BEGIN_ALLOW_THREADS;
     ERROR("%s", cpy);
@@ -448,7 +448,7 @@ static int cpy_write_callback(const data_set_t *ds,
       int64_t si;
       uint64_t ui;
       double d;
-      _Bool b;
+      bool b;
 
       type = meta_data_type(meta, table[i]);
       if (type == MD_TYPE_STRING) {
@@ -1136,7 +1136,11 @@ static void *cpy_interactive(void *pipefd) {
     cpy_log_exception("interactive session init");
   }
   cur_sig = PyOS_setsig(SIGINT, python_sigint_handler);
+#if PY_VERSION_HEX < 0x03070000
   PyOS_AfterFork();
+#else
+  PyOS_AfterFork_Child();
+#endif
   PyEval_InitThreads();
   close(*(int *)pipefd);
   PyRun_InteractiveLoop(stdin, "<stdin>");
@@ -1166,7 +1170,7 @@ static int cpy_init(void) {
       ERROR("python: Unable to create pipe.");
       return 1;
     }
-    if (plugin_thread_create(&thread, NULL, cpy_interactive, pipefd + 1,
+    if (plugin_thread_create(&thread, cpy_interactive, pipefd + 1,
                              "python interpreter")) {
       ERROR("python: Error creating thread for interactive interpreter.");
     }
@@ -1257,16 +1261,34 @@ static int cpy_init_python(void) {
   Py_Initialize();
   python_sigint_handler = PyOS_setsig(SIGINT, cur_sig);
 
-  PyType_Ready(&ConfigType);
-  PyType_Ready(&PluginDataType);
+  if (PyType_Ready(&ConfigType) == -1) {
+    cpy_log_exception("python initialization: ConfigType");
+    return 1;
+  }
+  if (PyType_Ready(&PluginDataType) == -1) {
+    cpy_log_exception("python initialization: PluginDataType");
+    return 1;
+  }
   ValuesType.tp_base = &PluginDataType;
-  PyType_Ready(&ValuesType);
+  if (PyType_Ready(&ValuesType) == -1) {
+    cpy_log_exception("python initialization: ValuesType");
+    return 1;
+  }
   NotificationType.tp_base = &PluginDataType;
-  PyType_Ready(&NotificationType);
+  if (PyType_Ready(&NotificationType) == -1) {
+    cpy_log_exception("python initialization: NotificationType");
+    return 1;
+  }
   SignedType.tp_base = &PyLong_Type;
-  PyType_Ready(&SignedType);
+  if (PyType_Ready(&SignedType) == -1) {
+    cpy_log_exception("python initialization: SignedType");
+    return 1;
+  }
   UnsignedType.tp_base = &PyLong_Type;
-  PyType_Ready(&UnsignedType);
+  if (PyType_Ready(&UnsignedType) == -1) {
+    cpy_log_exception("python initialization: UnsignedType");
+    return 1;
+  }
   errordict = PyDict_New();
   PyDict_SetItemString(
       errordict, "__doc__",
@@ -1366,7 +1388,7 @@ static int cpy_config(oconfig_item_t *ci) {
 #endif
       sfree(encoding);
     } else if (strcasecmp(item->key, "LogTraces") == 0) {
-      _Bool log_traces;
+      bool log_traces;
       if (cf_util_get_boolean(item, &log_traces) != 0) {
         status = 1;
         continue;

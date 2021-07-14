@@ -27,8 +27,8 @@
  **/
 
 #include "collectd.h"
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 #include "utils_time.h"
 
 #define CGPS_TRUE 1
@@ -141,7 +141,12 @@ static void *cgps_thread(void *pData) {
         continue;
       }
 
-      if (gps_read(&gpsd_conn) == -1) {
+#if GPSD_API_MAJOR_VERSION > 6
+      if (gps_read(&gpsd_conn, NULL, 0) == -1)
+#else
+      if (gps_read(&gpsd_conn) == -1)
+#endif
+      {
         WARNING("gps plugin: incorrect data! (err_count: %d)", err_count);
         err_count++;
 
@@ -282,8 +287,7 @@ static int cgps_init(void) {
         CDTIME_T_TO_DOUBLE(cgps_config_data.timeout),
         CDTIME_T_TO_DOUBLE(cgps_config_data.pause_connect));
 
-  status =
-      plugin_thread_create(&cgps_thread_id, NULL, cgps_thread, NULL, "gps");
+  status = plugin_thread_create(&cgps_thread_id, cgps_thread, NULL, "gps");
   if (status != 0) {
     ERROR("gps plugin: pthread_create() failed.");
     return -1;

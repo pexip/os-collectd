@@ -37,8 +37,8 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 
 #if HAVE_SYS_SWAP_H
 #include <sys/swap.h>
@@ -49,7 +49,9 @@
 #if HAVE_SYS_PARAM_H
 #include <sys/param.h>
 #endif
-#if HAVE_SYS_SYSCTL_H
+#if (defined(HAVE_SYS_SYSCTL_H) && defined(HAVE_SYSCTLBYNAME)) ||              \
+    defined(__OpenBSD__)
+/* implies BSD variant */
 #include <sys/sysctl.h>
 #endif
 #if HAVE_SYS_DKSTAT_H
@@ -74,14 +76,17 @@
 #if KERNEL_LINUX
 #define SWAP_HAVE_REPORT_BY_DEVICE 1
 static derive_t pagesize;
-static _Bool report_bytes = 0;
-static _Bool report_by_device = 0;
+static bool report_bytes;
+static bool report_by_device;
 /* #endif KERNEL_LINUX */
 
-#elif HAVE_SWAPCTL && HAVE_SWAPCTL_TWO_ARGS
+#elif HAVE_SWAPCTL && (HAVE_SWAPCTL_TWO_ARGS || HAVE_SWAPCTL_THREE_ARGS)
 #define SWAP_HAVE_REPORT_BY_DEVICE 1
 static derive_t pagesize;
-static _Bool report_by_device = 0;
+#if KERNEL_NETBSD
+static _Bool report_bytes = 0;
+#endif
+static bool report_by_device;
 /* #endif HAVE_SWAPCTL && HAVE_SWAPCTL_TWO_ARGS */
 
 #elif HAVE_SWAPCTL && HAVE_SWAPCTL_THREE_ARGS
@@ -93,7 +98,7 @@ static _Bool report_by_device = 0;
 /* #endif defined(VM_SWAPUSAGE) */
 
 #elif HAVE_LIBKVM_GETSWAPINFO
-static kvm_t *kvm_obj = NULL;
+static kvm_t *kvm_obj;
 int kvm_pagesize;
 /* #endif HAVE_LIBKVM_GETSWAPINFO */
 
@@ -109,16 +114,16 @@ static int pagesize;
 #error "No applicable input method."
 #endif /* HAVE_LIBSTATGRAB */
 
-static _Bool values_absolute = 1;
-static _Bool values_percentage = 0;
-static _Bool report_io = 1;
+static bool values_absolute = true;
+static bool values_percentage;
+static bool report_io = true;
 
 static int swap_config(oconfig_item_t *ci) /* {{{ */
 {
   for (int i = 0; i < ci->children_num; i++) {
     oconfig_item_t *child = ci->children + i;
     if (strcasecmp("ReportBytes", child->key) == 0)
-#if KERNEL_LINUX
+#if KERNEL_LINUX || KERNEL_NETBSD
       cf_util_get_boolean(child, &report_bytes);
 #else
       WARNING("swap plugin: The \"ReportBytes\" option "
@@ -150,16 +155,16 @@ static int swap_init(void) /* {{{ */
 {
 #if KERNEL_LINUX
   pagesize = (derive_t)sysconf(_SC_PAGESIZE);
-/* #endif KERNEL_LINUX */
+  /* #endif KERNEL_LINUX */
 
-#elif HAVE_SWAPCTL && HAVE_SWAPCTL_TWO_ARGS
+#elif HAVE_SWAPCTL && (HAVE_SWAPCTL_TWO_ARGS || HAVE_SWAPCTL_THREE_ARGS)
   /* getpagesize(3C) tells me this does not fail.. */
   pagesize = (derive_t)getpagesize();
-/* #endif HAVE_SWAPCTL */
+  /* #endif HAVE_SWAPCTL */
 
 #elif defined(VM_SWAPUSAGE)
-/* No init stuff */
-/* #endif defined(VM_SWAPUSAGE) */
+  /* No init stuff */
+  /* #endif defined(VM_SWAPUSAGE) */
 
 #elif HAVE_LIBKVM_GETSWAPINFO
   char errbuf[_POSIX2_LINE_MAX];
@@ -177,11 +182,11 @@ static int swap_init(void) /* {{{ */
     ERROR("swap plugin: kvm_openfiles failed, %s", errbuf);
     return -1;
   }
-/* #endif HAVE_LIBKVM_GETSWAPINFO */
+  /* #endif HAVE_LIBKVM_GETSWAPINFO */
 
 #elif HAVE_LIBSTATGRAB
-/* No init stuff */
-/* #endif HAVE_LIBSTATGRAB */
+  /* No init stuff */
+  /* #endif HAVE_LIBSTATGRAB */
 
 #elif HAVE_PERFSTAT
   pagesize = getpagesize();
@@ -203,14 +208,14 @@ static void swap_submit_usage(char const *plugin_instance, /* {{{ */
   sstrncpy(vl.type, "swap", sizeof(vl.type));
 
   if (values_absolute)
-    plugin_dispatch_multivalue(&vl, 0, DS_TYPE_GAUGE, "used", used, "free",
+    plugin_dispatch_multivalue(&vl, false, DS_TYPE_GAUGE, "used", used, "free",
                                free, other_name, other_value, NULL);
   if (values_percentage)
-    plugin_dispatch_multivalue(&vl, 1, DS_TYPE_GAUGE, "used", used, "free",
+    plugin_dispatch_multivalue(&vl, true, DS_TYPE_GAUGE, "used", used, "free",
                                free, other_name, other_value, NULL);
 } /* }}} void swap_submit_usage */
 
-#if KERNEL_LINUX || HAVE_PERFSTAT
+#if KERNEL_LINUX || HAVE_PERFSTAT || KERNEL_NETBSD
 __attribute__((nonnull(1))) static void
 swap_submit_derive(char const *type_instance, /* {{{ */
                    derive_t value) {
@@ -234,9 +239,7 @@ static int swap_read_separate(void) /* {{{ */
 
   fh = fopen("/proc/swaps", "r");
   if (fh == NULL) {
-    char errbuf[1024];
-    WARNING("swap plugin: fopen (/proc/swaps) failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+    WARNING("swap plugin: fopen (/proc/swaps) failed: %s", STRERRNO);
     return -1;
   }
 
@@ -291,9 +294,7 @@ static int swap_read_combined(void) /* {{{ */
 
   fh = fopen("/proc/meminfo", "r");
   if (fh == NULL) {
-    char errbuf[1024];
-    WARNING("swap plugin: fopen (/proc/meminfo) failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+    WARNING("swap plugin: fopen (/proc/meminfo) failed: %s", STRERRNO);
     return -1;
   }
 
@@ -336,53 +337,31 @@ static int swap_read_combined(void) /* {{{ */
 
 static int swap_read_io(void) /* {{{ */
 {
-  FILE *fh;
   char buffer[1024];
-
-  _Bool old_kernel = 0;
 
   uint8_t have_data = 0;
   derive_t swap_in = 0;
   derive_t swap_out = 0;
 
-  fh = fopen("/proc/vmstat", "r");
+  FILE *fh = fopen("/proc/vmstat", "r");
   if (fh == NULL) {
-    /* /proc/vmstat does not exist in kernels <2.6 */
-    fh = fopen("/proc/stat", "r");
-    if (fh == NULL) {
-      char errbuf[1024];
-      WARNING("swap: fopen: %s", sstrerror(errno, errbuf, sizeof(errbuf)));
-      return -1;
-    } else
-      old_kernel = 1;
+    WARNING("swap: fopen(/proc/vmstat): %s", STRERRNO);
+    return -1;
   }
 
   while (fgets(buffer, sizeof(buffer), fh) != NULL) {
     char *fields[8];
-    int numfields;
+    int numfields = strsplit(buffer, fields, STATIC_ARRAY_SIZE(fields));
 
-    numfields = strsplit(buffer, fields, STATIC_ARRAY_SIZE(fields));
+    if (numfields != 2)
+      continue;
 
-    if (!old_kernel) {
-      if (numfields != 2)
-        continue;
-
-      if (strcasecmp("pswpin", fields[0]) == 0) {
-        strtoderive(fields[1], &swap_in);
-        have_data |= 0x01;
-      } else if (strcasecmp("pswpout", fields[0]) == 0) {
-        strtoderive(fields[1], &swap_out);
-        have_data |= 0x02;
-      }
-    } else /* if (old_kernel) */
-    {
-      if (numfields != 3)
-        continue;
-
-      if (strcasecmp("page", fields[0]) == 0) {
-        strtoderive(fields[1], &swap_in);
-        strtoderive(fields[2], &swap_out);
-      }
+    if (strcasecmp("pswpin", fields[0]) == 0) {
+      strtoderive(fields[1], &swap_in);
+      have_data |= 0x01;
+    } else if (strcasecmp("pswpout", fields[0]) == 0) {
+      strtoderive(fields[1], &swap_out);
+      have_data |= 0x02;
     }
   } /* while (fgets) */
 
@@ -436,9 +415,7 @@ static int swap_read_kstat(void) /* {{{ */
   struct anoninfo ai;
 
   if (swapctl(SC_AINFO, &ai) == -1) {
-    char errbuf[1024];
-    ERROR("swap plugin: swapctl failed: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("swap plugin: swapctl failed: %s", STRERRNO);
     return -1;
   }
 
@@ -513,9 +490,7 @@ static int swap_read(void) /* {{{ */
 
   status = swapctl(SC_LIST, s);
   if (status < 0) {
-    char errbuf[1024];
-    ERROR("swap plugin: swapctl (SC_LIST) failed: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("swap plugin: swapctl (SC_LIST) failed: %s", STRERRNO);
     sfree(s_paths);
     sfree(s);
     return -1;
@@ -565,7 +540,7 @@ static int swap_read(void) /* {{{ */
     return -1;
   }
 
-  /* If the "separate" option was specified (report_by_device == 1), all
+  /* If the "separate" option was specified (report_by_device == true) all
    * values have already been dispatched from within the loop. */
   if (!report_by_device)
     swap_submit_usage(NULL, total - avail, avail, NULL, NAN);
@@ -577,6 +552,41 @@ static int swap_read(void) /* {{{ */
   /* #endif HAVE_SWAPCTL && HAVE_SWAPCTL_TWO_ARGS */
 
 #elif HAVE_SWAPCTL && HAVE_SWAPCTL_THREE_ARGS
+#if KERNEL_NETBSD
+#include <uvm/uvm_extern.h>
+
+static int swap_read_io(void) /* {{{ */
+{
+  static int uvmexp_mib[] = {CTL_VM, VM_UVMEXP2};
+  struct uvmexp_sysctl uvmexp;
+  size_t ssize;
+  derive_t swap_in, swap_out;
+
+  ssize = sizeof(uvmexp);
+  memset(&uvmexp, 0, ssize);
+  if (sysctl(uvmexp_mib, __arraycount(uvmexp_mib), &uvmexp, &ssize, NULL, 0) ==
+      -1) {
+    char errbuf[1024];
+    WARNING("swap: sysctl for uvmexp failed: %s",
+            sstrerror(errno, errbuf, sizeof(errbuf)));
+    return (-1);
+  }
+
+  swap_in = uvmexp.pgswapin;
+  swap_out = uvmexp.pgswapout;
+
+  if (report_bytes) {
+    swap_in = swap_in * pagesize;
+    swap_out = swap_out * pagesize;
+  }
+
+  swap_submit_derive("in", swap_in);
+  swap_submit_derive("out", swap_out);
+
+  return (0);
+} /* }}} */
+#endif
+
 static int swap_read(void) /* {{{ */
 {
   struct swapent *swap_entries;
@@ -615,12 +625,28 @@ static int swap_read(void) /* {{{ */
   /* TODO: Report per-device stats. The path name is available from
    * swap_entries[i].se_path */
   for (int i = 0; i < swap_num; i++) {
+    char path[PATH_MAX];
+    gauge_t this_used;
+    gauge_t this_total;
+
     if ((swap_entries[i].se_flags & SWF_ENABLE) == 0)
       continue;
 
-    used += ((gauge_t)swap_entries[i].se_inuse) * C_SWAP_BLOCK_SIZE;
-    total += ((gauge_t)swap_entries[i].se_nblks) * C_SWAP_BLOCK_SIZE;
-  }
+    this_used = ((gauge_t)swap_entries[i].se_inuse) * C_SWAP_BLOCK_SIZE;
+    this_total = ((gauge_t)swap_entries[i].se_nblks) * C_SWAP_BLOCK_SIZE;
+
+    /* Shortcut for the "combined" setting (default) */
+    if (!report_by_device) {
+      used += this_used;
+      total += this_total;
+      continue;
+    }
+
+    sstrncpy(path, swap_entries[i].se_path, sizeof(path));
+    escape_slashes(path, sizeof(path));
+
+    swap_submit_usage(path, this_used, this_total - this_used, NULL, NAN);
+  } /* for (swap_num) */
 
   if (total < used) {
     ERROR(
@@ -631,8 +657,15 @@ static int swap_read(void) /* {{{ */
   }
 
   swap_submit_usage(NULL, used, total - used, NULL, NAN);
+  /* If the "separate" option was specified (report_by_device == 1), all
+   * values have already been dispatched from within the loop. */
+  if (!report_by_device)
+    swap_submit_usage(NULL, used, total - used, NULL, NAN);
 
   sfree(swap_entries);
+#if KERNEL_NETBSD
+  swap_read_io();
+#endif
   return 0;
 } /* }}} int swap_read */
   /* #endif HAVE_SWAPCTL && HAVE_SWAPCTL_THREE_ARGS */
@@ -719,9 +752,7 @@ static int swap_read(void) /* {{{ */
   status =
       perfstat_memory_total(NULL, &pmemory, sizeof(perfstat_memory_total_t), 1);
   if (status < 0) {
-    char errbuf[1024];
-    WARNING("swap plugin: perfstat_memory_total failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+    WARNING("swap plugin: perfstat_memory_total failed: %s", STRERRNO);
     return -1;
   }
 

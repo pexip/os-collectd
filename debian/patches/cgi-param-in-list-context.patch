@@ -1,0 +1,58 @@
+From: Kentaro Hayashi <kenhys@xdump.org>
+Subject: Fix CGI::param error in collection3
+Bug: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=982294
+Forwarded: https://salsa.debian.org/debian/pkg-collectd/-/merge_requests/6
+
+When using collection3 as a CGI, the following error is sent to logs repeatedly.
+This MR fixes it:
+
+  FastCGI sent in stderr: "CGI::param called in list context from /usr/share/doc/collectd-core/examples/collection3/lib/Collectd/Graph/Common.pm line 529, this can lead to vulnerabilities. See the warning in "Fetching the value or values of a single named parameter" at /usr/share/perl5/CGI.pm line 412"
+
+This is caused by inappropriate usage of param(),
+it should be handled as a scalar or should be treated by multi_param() explicitly.
+
+Closes: #982294
+
+ref. https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=982294
+
+--- a/contrib/collection3/lib/Collectd/Graph/Common.pm
++++ b/contrib/collection3/lib/Collectd/Graph/Common.pm
+@@ -526,7 +526,7 @@
+   for (qw(hostname plugin plugin_instance type type_instance))
+   {
+     my $part = $_;
+-    my @temp = param ($part);
++    my @temp = multi_param ($part);
+     if (!@temp)
+     {
+       next;
+@@ -547,9 +547,9 @@
+ sub get_timespan_selection
+ {
+   my $ret = 86400;
+-  if (param ('timespan'))
++  if (scalar param ('timespan'))
+   {
+-    my $temp = int (param ('timespan'));
++    my $temp = int (scalar param ('timespan'));
+     if ($temp && ($temp > 0))
+     {
+       $ret = $temp;
+@@ -568,7 +568,7 @@
+     $ret{$_} = 0;
+   }
+ 
+-  for (param ('hostname'))
++  for (multi_param ('hostname'))
+   {
+     my $host = _sanitize_generic_allow_minus ($_);
+     if (defined ($ret{$host}))
+@@ -597,7 +597,7 @@
+     $ret{$_} = 0;
+   }
+ 
+-  for (param ('plugin'))
++  for (multi_param ('plugin'))
+   {
+     if (defined ($ret{$_}))
+     {

@@ -1,13 +1,14 @@
 Source: collectd
 Section: utils
 Priority: optional
-Maintainer: Sebastian Harl <tokkee@debian.org>
-Uploaders: Marc Fournier <marc@bl.uem.li>
-Build-Depends: debhelper (>= 9.20160709~), dpkg-dev (>= 1.14.10), po-debconf, dh-strip-nondeterminism, dh-autoreconf,
+Maintainer: Collectd Packaging Team <team+collectd@tracker.debian.org>
+Uploaders: Sebastian Harl <tokkee@debian.org>, Marc Fournier <marc@bl.uem.li>, Bernd Zeimetz <bzed@debian.org>
+Build-Depends: debhelper-compat (= 10), dpkg-dev (>= 1.14.10), po-debconf, dh-strip-nondeterminism, dh-autoreconf,
  bison, flex, autotools-dev, libltdl-dev, pkg-config,
  default-libmysqlclient-dev,
  intel-cmt-cat [amd64 i386],
- iptables-dev (>= 1.4.3.2-2) [linux-any],
+ libiptc-dev (>= 1.8.4-2) [linux-any] | libip4tc-dev [linux-any] | iptables-dev (>= 1.4.3.2-2) [linux-any],
+ libiptc-dev (>= 1.8.4-2) [linux-any] | libip6tc-dev [linux-any] | iptables-dev (>= 1.4.3.2-2) [linux-any],
  javahelper,
  kfreebsd-kernel-headers [kfreebsd-any],
  libatasmart-dev [linux-any],
@@ -17,11 +18,10 @@ Build-Depends: debhelper (>= 9.20160709~), dpkg-dev (>= 1.14.10), po-debconf, dh
  libdbi0-dev,
  libdpdk-dev [amd64 i386],
  libesmtp-dev,
- libganglia1-dev (>= 3) [linux-any],
  libgeom-dev [kfreebsd-any],
  libgcrypt20-dev,
  libglib2.0-dev,
- libgrpc++-dev [amd64 arm64 armel armhf i386 ppc64el powerpc],
+ libgrpc++-dev [amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x],
  libgps-dev,
  libhiredis-dev,
  libi2c-dev (>= 4.0~),
@@ -32,7 +32,6 @@ Build-Depends: debhelper (>= 9.20160709~), dpkg-dev (>= 1.14.10), po-debconf, dh
  libmicrohttpd-dev,
  libmodbus-dev,
  libmongoc-dev,
- libmosquitto-dev,
  libmnl-dev [linux-any],
  libnotify-dev,
  libopenipmi-dev,
@@ -47,14 +46,10 @@ Build-Depends: debhelper (>= 9.20160709~), dpkg-dev (>= 1.14.10), po-debconf, dh
  librdkafka-dev,
  libriemann-client-dev (>= 1.6.0),
  librrd-dev (>= 1.4~),
- libsensors4-dev [linux-any],
-# libsnmp-dev (>= 5.4.2.1~dfsg-4~) | (libsnmp-dev & perl (<< 5.10.1~rc2-1~))
+ libsensors-dev [linux-any],
  libsnmp-dev (>= 5.4.2.1~dfsg-4~) | libsnmp-dev | libsnmp9-dev,
  libsnmp-dev (>= 5.4.2.1~dfsg-4~) | perl (<< 5.10.1~rc2-1~),
- libtokyocabinet-dev [linux-any],
- libtokyotyrant-dev [linux-any],
  libudev-dev [linux-any],
- libupsclient-dev | libupsclient1-dev,
  libvarnishapi-dev,
  libvirt-dev (>= 0.4.0-6) [linux-any],
  libxen-dev [amd64 arm64 armhf i386],
@@ -64,14 +59,17 @@ Build-Depends: debhelper (>= 9.20160709~), dpkg-dev (>= 1.14.10), po-debconf, dh
  default-jdk [!hppa !sparc !kfreebsd-i386 !kfreebsd-amd64],
  protobuf-c-compiler,
  protobuf-compiler (>= 3.0.0),
- protobuf-compiler-grpc [amd64 arm64 armel armhf i386 ppc64el powerpc],
- python-dev,
- riemann-c-client
-Build-Conflicts: libpthread-dev, libhal-dev
+ protobuf-compiler-grpc [amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x],
+ python3-dev,
+ riemann-c-client,
+ libqpid-proton11-dev,
+ libmosquitto-dev,
+ libslurm-dev
+Build-Conflicts: libpthread-dev, libhal-dev, python-dev
 Standards-Version: 4.2.1
 Homepage: https://collectd.org/
-Vcs-Git: https://github.com/collectd/pkg-debian.git
-Vcs-Browser: https://github.com/collectd/pkg-debian.git
+Vcs-Git: https://salsa.debian.org/debian/pkg-collectd.git
+Vcs-Browser: https://salsa.debian.org/debian/pkg-collectd
 
 Package: collectd-core
 Architecture: any
@@ -84,7 +82,7 @@ Suggests: collectd-dev,
 # services providing data that may be collected by collectd
  apache2, apcupsd, bind9, ceph, chrony, default-mysql-server, gpsd, hddtemp,
  iptables, ipvsadm, lm-sensors, mbmon, memcached, nginx, notification-daemon,
- nut, openvpn, olsrd, pdns-server, postgresql, redis-server, slapd,
+ openvpn, olsrd, pdns-server, postgresql, redis-server, slapd,
  time-daemon, varnish, zookeeper,
  ${shlibs:Suggests}, default-jre-headless
 Replaces: collectd (<< 4.8.2-1~)
@@ -107,6 +105,7 @@ Description: statistics collection and monitoring daemon (core system)
  package.
  .
    * AMQP output plugin: amqp
+   * AMQP 1.0 output plugin: amqp1
    * Apache and lighttpd statistics provided by mod_status: apache
    * APC UPS's charge, load, input/output/battery voltage, etc.: apcups
    * Ascent server statistics: ascent
@@ -141,7 +140,6 @@ Description: statistics collection and monitoring daemon (core system)
    * Monitor gps related data through gpsd: gps
    * Send or receive values over the network using the gRPC framework: grpc
    * query data from Java processes using JMX: GenericJMX (Java based plugin)
-   * receive and interpret Ganglia multicast traffic: gmond
    * harddisk temperature: hddtemp
    * Report the number of used and free hugepages: hugepages
    * Intel Resource Director Technology statistics: intel_rdt
@@ -175,7 +173,6 @@ Description: statistics collection and monitoring daemon (core system)
    * send notification E-mails: notify_email
    * send notifications to nagios: notify_nagios
    * NTP daemon's local clock drift, offset to peers, etc.: ntpd
-   * UPS information: nut
    * Optimized Link State Routing daemon statistics: olsrd
    * OpenLDAP's cn=Monitor statistics: openldap
    * OpenVPN traffic and compression statistics: openvpn
@@ -211,7 +208,6 @@ Description: statistics collection and monitoring daemon (core system)
    * Linux ACPI thermal zone information: thermal
    * check thresholds and for missing values: threshold
    * statistics from Intel turbo-capable processors: turbostat
-   * Tokyo Tyrant server statistics: tokyotyrant
    * external runtime interface: unixsock
    * system uptime: uptime
    * number of users logged into the system: users
@@ -230,6 +226,7 @@ Description: statistics collection and monitoring daemon (core system)
    * send collected values to a Redis server: write_redis
    * send collected values to a Riemann server: write_riemann
    * send collected values to a Sensu client: write_sensu
+   * send collected values to Google Stackdriver: write_stackdriver
    * send collected values to an OpenTSDB server: write_tsdb
    * XEN Hypervisor CPU stats: xencpu
    * ZFS's Adaptive Replacement Cache statistics: zfs_arc
@@ -237,7 +234,7 @@ Description: statistics collection and monitoring daemon (core system)
 
 Package: collectd
 Architecture: any
-Depends: collectd-core (>= ${source:Version}), collectd-core (<< 6~),
+Depends: collectd-core (>= ${source:Version}), collectd-core (<< ${source:Version}.1~),
  ${shlibs:Depends}, ${misc:Depends}
 Recommends: ${shlibs:Recommends}, default-jre-headless
 Description: statistics collection and monitoring daemon
@@ -259,7 +256,6 @@ Package: collectd-utils
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Recommends: collectd
-Suggests: icinga
 Replaces: collectd (<< 4.6.1-1~)
 Description: statistics collection and monitoring daemon (utilities)
  collectd is a small daemon which collects system information periodically and
@@ -273,25 +269,9 @@ Description: statistics collection and monitoring daemon (utilities)
    * collectdctl: Control interface for collectd
    * collectd-nagios: Nagios plugin for querying collectd
 
-Package: collectd-dbg
-Section: debug
-Architecture: any
-Priority: optional
-Depends: collectd-core (= ${binary:Version}), ${misc:Depends}
-Recommends: collectd-utils (= ${binary:Version}),
- libcollectdclient1 (= ${binary:Version})
-Description: statistics collection and monitoring daemon (debugging symbols)
- collectd is a small daemon which collects system information periodically and
- provides mechanisms to monitor and store the values in a variety of ways.
- Since the daemon doesn't need to startup every time it wants to update the
- values it's very fast and easy on the system. Also, the statistics are very
- fine grained since the files are updated every 10 seconds by default.
- .
- This package contains the debugging symbols.
-
 Package: collectd-dev
 Architecture: all
-Depends: collectd-core (>= ${source:Version}), collectd-core (<< 5.9~),
+Depends: collectd-core (>= ${source:Version}), collectd-core (<< ${source:Version}.1~),
  ${misc:Depends}
 Description: statistics collection and monitoring daemon (development files)
  collectd is a small daemon which collects system information periodically and
@@ -322,7 +302,7 @@ Package: libcollectdclient1
 Section: libs
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Recommends: collectd
+Suggests: collectd
 Description: client library for collectd's control interface
  libcollectdclient provides an API to access the control interface provided by
  the unixsock plugin of collectd, a statistics collection and monitoring
@@ -331,4 +311,3 @@ Description: client library for collectd's control interface
  other applications such as monitoring solutions.
  .
  This package contains the shared library.
-

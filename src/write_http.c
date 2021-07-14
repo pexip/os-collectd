@@ -25,10 +25,11 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
-#include "utils_format_json.h"
-#include "utils_format_kairosdb.h"
+#include "utils/common/common.h"
+#include "utils/curl_stats/curl_stats.h"
+#include "utils/format_json/format_json.h"
+#include "utils/format_kairosdb/format_kairosdb.h"
 
 #include <curl/curl.h>
 
@@ -38,6 +39,10 @@
 
 #ifndef WRITE_HTTP_DEFAULT_PREFIX
 #define WRITE_HTTP_DEFAULT_PREFIX "collectd"
+#endif
+
+#ifndef WRITE_HTTP_RESPONSE_BUFFER_SIZE
+#define WRITE_HTTP_RESPONSE_BUFFER_SIZE 1024
 #endif
 
 /*
@@ -50,16 +55,16 @@ struct wh_callback_s {
   char *user;
   char *pass;
   char *credentials;
-  _Bool verify_peer;
-  _Bool verify_host;
+  bool verify_peer;
+  bool verify_host;
   char *cacert;
   char *capath;
   char *clientkey;
   char *clientcert;
   char *clientkeypass;
   long sslversion;
-  _Bool store_rates;
-  _Bool log_http_error;
+  bool store_rates;
+  bool log_http_error;
   int low_speed_limit;
   time_t low_speed_time;
   int timeout;
@@ -68,10 +73,11 @@ struct wh_callback_s {
 #define WH_FORMAT_JSON 1
 #define WH_FORMAT_KAIROSDB 2
   int format;
-  _Bool send_metrics;
-  _Bool send_notifications;
+  bool send_metrics;
+  bool send_notifications;
 
   CURL *curl;
+  curl_stats_t *curl_stats;
   struct curl_slist *headers;
   char curl_errbuf[CURL_ERROR_SIZE];
 
@@ -83,6 +89,9 @@ struct wh_callback_s {
 
   pthread_mutex_t send_lock;
 
+  char response_buffer[WRITE_HTTP_RESPONSE_BUFFER_SIZE];
+  unsigned int response_buffer_pos;
+
   int data_ttl;
   char *metrics_prefix;
 };
@@ -90,6 +99,34 @@ typedef struct wh_callback_s wh_callback_t;
 
 static char **http_attrs;
 static size_t http_attrs_num;
+
+/* libcurl may call this multiple times depending on how big the server's
+ * http response is
+ */
+static size_t wh_curl_write_callback(char *ptr, size_t size, size_t nmemb,
+                                     void *userdata) {
+
+  wh_callback_t *cb = (wh_callback_t *)userdata;
+  unsigned int len = 0;
+
+  if ((cb->response_buffer_pos + nmemb) > sizeof(cb->response_buffer))
+    len = sizeof(cb->response_buffer) - cb->response_buffer_pos;
+  else
+    len = nmemb;
+
+  DEBUG(
+      "write_http plugin: curl callback nmemb=%zu buffer_pos=%u write_len=%u ",
+      nmemb, cb->response_buffer_pos, len);
+
+  memcpy(cb->response_buffer + cb->response_buffer_pos, ptr, len);
+  cb->response_buffer_pos += len;
+  cb->response_buffer[sizeof(cb->response_buffer) - 1] = '\0';
+
+  /* Always return nmemb even if we write less so libcurl won't throw an error
+   */
+  return nmemb;
+
+} /* }}} wh_curl_write_callback */
 
 static void wh_log_http_error(wh_callback_t *cb) {
   if (!cb->log_http_error)
@@ -117,6 +154,10 @@ static void wh_reset_buffer(wh_callback_t *cb) /* {{{ */
     format_json_initialize(cb->send_buffer, &cb->send_buffer_fill,
                            &cb->send_buffer_free);
   }
+
+  memset(cb->response_buffer, 0, sizeof(cb->response_buffer));
+  cb->response_buffer_pos = 0;
+
 } /* }}} wh_reset_buffer */
 
 /* must hold cb->send_lock when calling */
@@ -126,14 +167,31 @@ static int wh_post_nolock(wh_callback_t *cb, char const *data) /* {{{ */
 
   curl_easy_setopt(cb->curl, CURLOPT_URL, cb->location);
   curl_easy_setopt(cb->curl, CURLOPT_POSTFIELDS, data);
+  curl_easy_setopt(cb->curl, CURLOPT_WRITEFUNCTION, &wh_curl_write_callback);
+  curl_easy_setopt(cb->curl, CURLOPT_WRITEDATA, (void *)cb);
   status = curl_easy_perform(cb->curl);
 
   wh_log_http_error(cb);
+
+  if (cb->curl_stats != NULL) {
+    int rc = curl_stats_dispatch(cb->curl_stats, cb->curl, NULL, "write_http",
+                                 cb->name);
+    if (rc != 0) {
+      ERROR("write_http plugin: curl_stats_dispatch failed with "
+            "status %i",
+            rc);
+    }
+  }
 
   if (status != CURLE_OK) {
     ERROR("write_http plugin: curl_easy_perform failed with "
           "status %i: %s",
           status, cb->curl_errbuf);
+    if (strlen(cb->response_buffer) > 0) {
+      ERROR("write_http plugin: curl_response=%s", cb->response_buffer);
+    }
+  } else {
+    DEBUG("write_http plugin: curl_response=%s", cb->response_buffer);
   }
   return status;
 } /* }}} wh_post_nolock */
@@ -228,7 +286,7 @@ static int wh_flush_nolock(cdtime_t timeout, wh_callback_t *cb) /* {{{ */
   int status;
 
   DEBUG("write_http plugin: wh_flush_nolock: timeout = %.3f; "
-        "send_buffer_fill = %zu;",
+        "send_buffer_fill = %" PRIsz ";",
         CDTIME_T_TO_DOUBLE(timeout), cb->send_buffer_fill);
 
   /* timeout == 0  => flush unconditionally */
@@ -317,6 +375,9 @@ static void wh_callback_free(void *data) /* {{{ */
     cb->curl = NULL;
   }
 
+  curl_stats_destroy(cb->curl_stats);
+  cb->curl_stats = NULL;
+
   if (cb->headers != NULL) {
     curl_slist_free_all(cb->headers);
     cb->headers = NULL;
@@ -380,7 +441,7 @@ static int wh_write_command(const data_set_t *ds,
                                  CDTIME_T_TO_DOUBLE(vl->interval), values);
   if (command_len >= sizeof(command)) {
     ERROR("write_http plugin: Command buffer too small: "
-          "Need %zu bytes.",
+          "Need %" PRIsz " bytes.",
           command_len + 1);
     return -1;
   }
@@ -410,8 +471,8 @@ static int wh_write_command(const data_set_t *ds,
   cb->send_buffer_fill += command_len;
   cb->send_buffer_free -= command_len;
 
-  DEBUG("write_http plugin: <%s> buffer %zu/%zu (%g%%) \"%s\"", cb->location,
-        cb->send_buffer_fill, cb->send_buffer_size,
+  DEBUG("write_http plugin: <%s> buffer %" PRIsz "/%" PRIsz " (%g%%) \"%s\"",
+        cb->location, cb->send_buffer_fill, cb->send_buffer_size,
         100.0 * ((double)cb->send_buffer_fill) / ((double)cb->send_buffer_size),
         command);
 
@@ -452,8 +513,8 @@ static int wh_write_json(const data_set_t *ds, const value_list_t *vl, /* {{{ */
     return status;
   }
 
-  DEBUG("write_http plugin: <%s> buffer %zu/%zu (%g%%)", cb->location,
-        cb->send_buffer_fill, cb->send_buffer_size,
+  DEBUG("write_http plugin: <%s> buffer %" PRIsz "/%" PRIsz " (%g%%)",
+        cb->location, cb->send_buffer_fill, cb->send_buffer_size,
         100.0 * ((double)cb->send_buffer_fill) /
             ((double)cb->send_buffer_size));
 
@@ -501,8 +562,8 @@ static int wh_write_kairosdb(const data_set_t *ds,
     return status;
   }
 
-  DEBUG("write_http plugin: <%s> buffer %zu/%zu (%g%%)", cb->location,
-        cb->send_buffer_fill, cb->send_buffer_size,
+  DEBUG("write_http plugin: <%s> buffer %" PRIsz "/%" PRIsz " (%g%%)",
+        cb->location, cb->send_buffer_fill, cb->send_buffer_size,
         100.0 * ((double)cb->send_buffer_fill) /
             ((double)cb->send_buffer_size));
 
@@ -624,18 +685,19 @@ static int wh_config_node(oconfig_item_t *ci) /* {{{ */
     ERROR("write_http plugin: calloc failed.");
     return -1;
   }
-  cb->verify_peer = 1;
-  cb->verify_host = 1;
+  cb->verify_peer = true;
+  cb->verify_host = true;
   cb->format = WH_FORMAT_COMMAND;
   cb->sslversion = CURL_SSLVERSION_DEFAULT;
   cb->low_speed_limit = 0;
   cb->timeout = 0;
-  cb->log_http_error = 0;
+  cb->log_http_error = false;
   cb->headers = NULL;
-  cb->send_metrics = 1;
-  cb->send_notifications = 0;
+  cb->send_metrics = true;
+  cb->send_notifications = false;
   cb->data_ttl = 0;
   cb->metrics_prefix = strdup(WRITE_HTTP_DEFAULT_PREFIX);
+  cb->curl_stats = NULL;
 
   if (cb->metrics_prefix == NULL) {
     ERROR("write_http plugin: strdup failed.");
@@ -710,7 +772,11 @@ static int wh_config_node(oconfig_item_t *ci) /* {{{ */
       status = config_set_format(cb, child);
     else if (strcasecmp("Metrics", child->key) == 0)
       cf_util_get_boolean(child, &cb->send_metrics);
-    else if (strcasecmp("Notifications", child->key) == 0)
+    else if (strcasecmp("Statistics", child->key) == 0) {
+      cb->curl_stats = curl_stats_from_config(child);
+      if (cb->curl_stats == NULL)
+        status = -1;
+    } else if (strcasecmp("Notifications", child->key) == 0)
       cf_util_get_boolean(child, &cb->send_notifications);
     else if (strcasecmp("StoreRates", child->key) == 0)
       status = cf_util_get_boolean(child, &cb->store_rates);
@@ -802,10 +868,12 @@ static int wh_config_node(oconfig_item_t *ci) /* {{{ */
   /* Allocate the buffer. */
   cb->send_buffer = malloc(cb->send_buffer_size);
   if (cb->send_buffer == NULL) {
-    ERROR("write_http plugin: malloc(%zu) failed.", cb->send_buffer_size);
+    ERROR("write_http plugin: malloc(%" PRIsz ") failed.",
+          cb->send_buffer_size);
     wh_callback_free(cb);
     return -1;
   }
+
   /* Nulls the buffer and sets ..._free and ..._fill. */
   wh_reset_buffer(cb);
 
@@ -814,7 +882,8 @@ static int wh_config_node(oconfig_item_t *ci) /* {{{ */
         callback_name, cb->location);
 
   user_data_t user_data = {
-      .data = cb, .free_func = wh_callback_free,
+      .data = cb,
+      .free_func = wh_callback_free,
   };
 
   if (cb->send_metrics) {
