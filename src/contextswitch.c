@@ -23,14 +23,11 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 
-#ifdef HAVE_SYS_SYSCTL_H
+#if defined(HAVE_SYSCTLBYNAME) && defined(HAVE_SYS_SYSCTL_H)
 #include <sys/sysctl.h>
-#endif
-
-#if HAVE_SYSCTLBYNAME
 /* no global variables */
 /* #endif HAVE_SYSCTLBYNAME */
 
@@ -73,7 +70,7 @@ static int cs_read(void) {
   }
 
   cs_submit(value);
-/* #endif HAVE_SYSCTLBYNAME */
+  /* #endif HAVE_SYSCTLBYNAME */
 
 #elif KERNEL_LINUX
   FILE *fh;
@@ -85,8 +82,7 @@ static int cs_read(void) {
 
   fh = fopen("/proc/stat", "r");
   if (fh == NULL) {
-    ERROR("contextswitch plugin: unable to open /proc/stat: %s",
-          sstrerror(errno, buffer, sizeof(buffer)));
+    ERROR("contextswitch plugin: unable to open /proc/stat: %s", STRERRNO);
     return -1;
   }
 
@@ -117,7 +113,7 @@ static int cs_read(void) {
 
   if (status == -2)
     ERROR("contextswitch plugin: Unable to find context switch value.");
-/* #endif  KERNEL_LINUX */
+    /* #endif  KERNEL_LINUX */
 
 #elif HAVE_PERFSTAT
   int status = 0;
@@ -126,9 +122,7 @@ static int cs_read(void) {
   status =
       perfstat_cpu_total(NULL, &perfcputotal, sizeof(perfstat_cpu_total_t), 1);
   if (status < 0) {
-    char errbuf[1024];
-    ERROR("contextswitch plugin: perfstat_cpu_total: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("contextswitch plugin: perfstat_cpu_total: %s", STRERRNO);
     return -1;
   }
 

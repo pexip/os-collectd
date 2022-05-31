@@ -45,6 +45,14 @@ Features
       Name server and resolver statistics from the `statistics-channel'
       interface of BIND 9.5, 9,6 and later.
 
+    - buddyinfo
+      Statistics from buddyinfo file about memory fragmentation.
+
+    - capabilities
+      Platform capabilities decoded from hardware subsystems, for example from
+      SMBIOS using dmidecode.
+      <https://www.nongnu.org/dmidecode/>
+
     - ceph
       Statistics from the Ceph distributed storage system.
 
@@ -53,6 +61,9 @@ Features
 
     - chrony
       Chrony daemon statistics: Local clock drift, offset to peers, etc.
+
+    - connectivity
+      Event-based interface status.
 
     - conntrack
       Number of nf_conntrack entries.
@@ -85,6 +96,9 @@ Features
       Executes SQL statements on various databases and interprets the returned
       data.
 
+    - dcpmm
+      Collects Intel Optane DC Presistent Memory (DCPMM) performance and health statistics.
+
     - df
       Mountpoint usage (Basically the values `df(1)' delivers)
 
@@ -99,6 +113,18 @@ Features
     - dpdkstat
       Collect DPDK interface statistics.
       See docs/BUILD.dpdkstat.md for detailed build instructions.
+
+      This plugin should be compiled with compiler defenses enabled, for
+      example -fstack-protector.
+
+    - dpdk_telemetry
+      Collect DPDK interface, application and global statistics.
+      This plugin can be used as substitute to dpdkstat plugin.
+
+      This plugin is dependent on DPDK 19.08 release and must be used
+      along with the DPDK application.
+
+      Also, this plugin has dependency on Jansson library.
 
     - drbd
       Collect individual drbd resource statistics.
@@ -132,6 +158,9 @@ Features
     - gps
       Monitor gps related data through gpsd.
 
+    - gpu_nvidia
+      Monitor NVIDIA GPU statistics available through NVML.
+
     - hddtemp
       Hard disk temperatures using hddtempd.
 
@@ -139,6 +168,12 @@ Features
       Report the number of used and free hugepages. More info on
       hugepages can be found here:
       https://www.kernel.org/doc/Documentation/vm/hugetlbpage.txt.
+
+      This plugin should be compiled with compiler defenses enabled, for
+      example -fstack-protector.
+
+    - infiniband
+      Attributes and counters for each port on each IB device.
 
     - intel_pmu
       The intel_pmu plugin reads performance counters provided by the Linux
@@ -164,6 +199,9 @@ Features
 
     - ipmi
       IPMI (Intelligent Platform Management Interface) sensors information.
+
+    - ipstats
+      IPv4 and IPv6; incoming, outgoing, forwarded counters. FreeBSD only.
 
     - iptables
       Iptables' counters: Number of bytes that were matched by a certain
@@ -194,10 +232,6 @@ Features
       makes it possible to write plugins in Lua which are executed by
       collectd without the need to start a heavy interpreter every interval.
       See collectd-lua(5) for details.
-
-    - lvm
-      Size of “Logical Volumes” (LV) and “Volume Groups” (VG) of Linux'
-      “Logical Volume Manager” (LVM).
 
     - madwifi
       Queries very detailed usage statistics from wireless LAN adapters and
@@ -308,6 +342,10 @@ Features
       OVS documentation.
       <http://openvswitch.org/support/dist-docs/INSTALL.rst.html>
 
+    - pcie_errors
+      Read errors from PCI Express Device Status and AER extended capabilities.
+      <https://www.design-reuse.com/articles/38374/pcie-error-logging-and-handling-on-a-typical-soc.html>
+
     - perl
       The perl plugin implements a Perl-interpreter into collectd. You can
       write your own plugins in Perl and return arbitrary values using this
@@ -333,6 +371,9 @@ Features
 
     - processes
       Process counts: Number of running, sleeping, zombie, ... processes.
+
+    - procevent
+      Listens for process starts and exits via netlink.
 
     - protocols
       Counts various aspects of network protocols such as IP, TCP, UDP, etc.
@@ -365,6 +406,10 @@ Features
       to have its measurements fed to collectd. This includes multimeters,
       sound level meters, thermometers, and much more.
 
+    - slurm
+      Gathers per-partition node and job state information using libslurm,
+      as well as internal health statistics.
+
     - smart
       Collect SMART statistics, notably load cycle count, temperature
       and bad sectors.
@@ -377,6 +422,9 @@ Features
     - statsd
       Acts as a StatsD server, reading values sent over the network from StatsD
       clients and calculating rates and other aggregates out of these values.
+
+    - sysevent
+      Listens to rsyslog events and submits matched values.
 
     - swap
       Pages swapped out onto hard disk or whatever is called `swap' by the OS..
@@ -414,6 +462,10 @@ Features
     - turbostat
       Reads CPU frequency and C-state residency on modern Intel
       turbo-capable processors.
+
+    - ubi
+      Reads the count of bad physical eraseblocks and the current
+      maximum erase counter value on UBI volumes.
 
     - uptime
       System uptime statistics.
@@ -459,7 +511,11 @@ Features
 
     - amqp
       Sends JSON-encoded data to an Advanced Message Queuing Protocol (AMQP)
-      server, such as RabbitMQ.
+      0.9.1 server, such as RabbitMQ.
+
+    - amqp1
+      Sends JSON-encoded data to an Advanced Message Queuing Protocol (AMQP)
+      1.0 server, such as Qpid Dispatch Router or Apache Artemis Broker.
 
     - csv
       Write to comma separated values (CSV) files. This needs lots of
@@ -545,6 +601,10 @@ Features
     - write_sensu
       Sends data to Sensu, a stream processing and monitoring system, via the
       Sensu client local TCP socket.
+
+    - write_syslog
+      Sends data in syslog format, using TCP, where the message
+      contains the metric in human or JSON format.
 
     - write_tsdb
       Sends data OpenTSDB, a scalable no master, no shared state time series
@@ -735,6 +795,10 @@ Prerequisites
     particular.
     <http://developer.apple.com/corefoundation/>
 
+  * CUDA (optional)
+    Used by the `gpu_nvidia' plugin
+    <https://developer.nvidia.com/cuda-downloads>
+
   * libatasmart (optional)
     Used by the `smart' plugin.
     <http://git.0pointer.de/?p=libatasmart.git>
@@ -790,6 +854,10 @@ Prerequisites
     For querying iptables counters.
     <http://netfilter.org/>
 
+  * libjansson (optional)
+    Parse JSON data. This is used for the `capabilities' and `dpdk_telemetry` plugins.
+    <http://www.digip.org/jansson/>
+
   * libjevents (optional)
     The jevents library is used by the `intel_pmu' plugin to access the Linux
     kernel perf interface.
@@ -810,10 +878,6 @@ Prerequisites
   * liblua (optional)
     Used by the `lua' plugin. Currently, Lua 5.1 and later are supported.
     <https://www.lua.org/>
-
-  * liblvm2 (optional)
-    Used by the `lvm' plugin.
-    <ftp://sources.redhat.com/pub/lvm2/>
 
   * libmemcached (optional)
     Used by the `memcachec' plugin to connect to a memcache daemon.
@@ -878,6 +942,12 @@ Prerequisites
     ithread support (introduced in Perl 5.6.0).
     <http://www.perl.org/>
 
+  * libpmwapi (optional)
+    Used by the `dcpmm` plugin.
+    The library github: https://github.com/intel/intel-pmwatch
+    Follow the pmwatch build instructions mentioned for dcpmm plugin and
+    use the install path to resolve the dependency here.
+
   * libpq (optional)
     The PostgreSQL C client library used by the `postgresql' plugin.
     <http://www.postgresql.org/>
@@ -902,8 +972,14 @@ Prerequisites
     are supported.
     <http://www.python.org/>
 
+  * libqpid-proton (optional)
+    Used by the `amqp1' plugin for AMQP 1.0 connections, for example to
+    Qdrouterd.
+    <http://qpid.apache.org/>
+
   * librabbitmq (optional; also called “rabbitmq-c”)
-    Used by the `amqp' plugin for AMQP connections, for example to RabbitMQ.
+    Used by the `amqp' plugin for AMQP 0.9.1 connections, for example to
+    RabbitMQ.
     <http://hg.rabbitmq.com/rabbitmq-c/>
 
   * librdkafka (optional; also called “rdkafka”)
@@ -933,6 +1009,10 @@ Prerequisites
     Used by the `sigrok' plugin. In addition, libsigrok depends on glib,
     libzip, and optionally (depending on which drivers are enabled) on
     libusb, libftdi and libudev.
+
+  * libslurm (optional)
+    Used by the `slurm` plugin.
+    <https://slurm.schedmd.com/>
 
   * libstatgrab (optional)
     Used by various plugins to collect statistics on systems other than Linux
@@ -981,9 +1061,8 @@ Configuring / Compiling / Installing
 ------------------------------------
 
   To configure, build and install collectd with the default settings, run
-  `./configure && make && make install'.  For detailed, generic instructions
-  see INSTALL. For a complete list of configure options and their description,
-  run `./configure --help'.
+  `./configure && make && make install'.  For a complete list of configure
+  options and their description, run `./configure --help'.
 
   By default, the configure script will check for all build dependencies and
   disable all plugins whose requirements cannot be fulfilled (any other plugin
@@ -1023,6 +1102,37 @@ To generate the `configure` script, you'll need the following dependencies:
 - pkg-config
 
 The `build.sh' script takes no arguments.
+
+
+Building on Windows
+-----------------------------------------------
+
+Collectd can be built on Windows using Cygwin, and the result is a binary that
+runs natively on Windows. That is, Cygwin is only needed for building, not running,
+collectd.
+
+You will need to install the following Cygwin packages:
+- automake
+- bison
+- flex
+- git
+- libtool
+- make
+- mingw64-x86_64-dlfcn
+- mingw64-x86_64-gcc-core
+- mingw64-x86_64-zlib
+- pkg-config
+
+To build, just run the `build.sh' script in your Cygwin terminal. By default, it installs
+to "C:/Program Files/collectd". You can change the location by setting the INSTALL_DIR
+variable:
+
+$ export INSTALL_DIR="C:/some/other/install/directory"
+$ ./build.sh
+
+or:
+
+$ INSTALL_DIR="C:/some/other/install/directory" ./build.sh
 
 
 Crosscompiling

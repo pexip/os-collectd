@@ -28,16 +28,18 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
-#include "utils_cmd_putval.h"
-#include "utils_format_graphite.h"
-#include "utils_format_json.h"
+#include "utils/cmds/putval.h"
+#include "utils/common/common.h"
+#include "utils/format_graphite/format_graphite.h"
+#include "utils/format_json/format_json.h"
+#include "utils_random.h"
 
 #include <amqp.h>
 #include <amqp_framing.h>
 
 #ifdef HAVE_AMQP_TCP_SOCKET_H
+#include <amqp_ssl_socket.h>
 #include <amqp_tcp_socket.h>
 #endif
 #ifdef HAVE_AMQP_SOCKET_H
@@ -66,14 +68,22 @@ int amqp_socket_close(amqp_socket_t *);
  * Data types
  */
 struct camqp_config_s {
-  _Bool publish;
+  bool publish;
   char *name;
 
-  char *host;
+  char **hosts;
+  size_t hosts_count;
   int port;
   char *vhost;
   char *user;
   char *password;
+
+  bool tls_enabled;
+  bool tls_verify_peer;
+  bool tls_verify_hostname;
+  char *tls_cacert;
+  char *tls_client_cert;
+  char *tls_client_key;
 
   char *exchange;
   char *routing_key;
@@ -83,7 +93,7 @@ struct camqp_config_s {
 
   /* publish only */
   uint8_t delivery_mode;
-  _Bool store_rates;
+  bool store_rates;
   int format;
   /* publish & graphite format only */
   char *prefix;
@@ -94,8 +104,8 @@ struct camqp_config_s {
   /* subscribe only */
   char *exchange_type;
   char *queue;
-  _Bool queue_durable;
-  _Bool queue_auto_delete;
+  bool queue_durable;
+  bool queue_auto_delete;
 
   amqp_connection_state_t connection;
   pthread_mutex_t lock;
@@ -105,15 +115,14 @@ typedef struct camqp_config_s camqp_config_t;
 /*
  * Global variables
  */
-static const char *def_host = "localhost";
 static const char *def_vhost = "/";
 static const char *def_user = "guest";
 static const char *def_password = "guest";
 static const char *def_exchange = "amq.fanout";
 
-static pthread_t *subscriber_threads = NULL;
-static size_t subscriber_threads_num = 0;
-static _Bool subscriber_threads_running = 1;
+static pthread_t *subscriber_threads;
+static size_t subscriber_threads_num;
+static bool subscriber_threads_running = true;
 
 #define CONF(c, f) (((c)->f != NULL) ? (c)->f : def_##f)
 
@@ -145,10 +154,13 @@ static void camqp_config_free(void *ptr) /* {{{ */
   camqp_close_connection(conf);
 
   sfree(conf->name);
-  sfree(conf->host);
+  strarray_free(conf->hosts, conf->hosts_count);
   sfree(conf->vhost);
   sfree(conf->user);
   sfree(conf->password);
+  sfree(conf->tls_cacert);
+  sfree(conf->tls_client_cert);
+  sfree(conf->tls_client_key);
   sfree(conf->exchange);
   sfree(conf->exchange_type);
   sfree(conf->queue);
@@ -176,16 +188,16 @@ static char *camqp_bytes_cstring(amqp_bytes_t *in) /* {{{ */
   return ret;
 } /* }}} char *camqp_bytes_cstring */
 
-static _Bool camqp_is_error(camqp_config_t *conf) /* {{{ */
+static bool camqp_is_error(camqp_config_t *conf) /* {{{ */
 {
   amqp_rpc_reply_t r;
 
   r = amqp_get_rpc_reply(conf->connection);
   if (r.reply_type == AMQP_RESPONSE_NORMAL)
-    return 0;
+    return false;
 
-  return 1;
-} /* }}} _Bool camqp_is_error */
+  return true;
+} /* }}} bool camqp_is_error */
 
 static char *camqp_strerror(camqp_config_t *conf, /* {{{ */
                             char *buffer, size_t buffer_size) {
@@ -217,23 +229,23 @@ static char *camqp_strerror(camqp_config_t *conf, /* {{{ */
     if (r.reply.id == AMQP_CONNECTION_CLOSE_METHOD) {
       amqp_connection_close_t *m = r.reply.decoded;
       char *tmp = camqp_bytes_cstring(&m->reply_text);
-      snprintf(buffer, buffer_size, "Server connection error %d: %s",
-               m->reply_code, tmp);
+      ssnprintf(buffer, buffer_size, "Server connection error %d: %s",
+                m->reply_code, tmp);
       sfree(tmp);
     } else if (r.reply.id == AMQP_CHANNEL_CLOSE_METHOD) {
       amqp_channel_close_t *m = r.reply.decoded;
       char *tmp = camqp_bytes_cstring(&m->reply_text);
-      snprintf(buffer, buffer_size, "Server channel error %d: %s",
-               m->reply_code, tmp);
+      ssnprintf(buffer, buffer_size, "Server channel error %d: %s",
+                m->reply_code, tmp);
       sfree(tmp);
     } else {
-      snprintf(buffer, buffer_size, "Server error method %#" PRIx32,
-               r.reply.id);
+      ssnprintf(buffer, buffer_size, "Server error method %#" PRIx32,
+                r.reply.id);
     }
     break;
 
   default:
-    snprintf(buffer, buffer_size, "Unknown reply type %i", (int)r.reply_type);
+    ssnprintf(buffer, buffer_size, "Unknown reply type %i", (int)r.reply_type);
   }
 
   return buffer;
@@ -320,16 +332,17 @@ static int camqp_setup_queue(camqp_config_t *conf) /* {{{ */
   amqp_queue_declare_ok_t *qd_ret;
   amqp_basic_consume_ok_t *cm_ret;
 
-  qd_ret = amqp_queue_declare(conf->connection,
-                              /* channel     = */ CAMQP_CHANNEL,
-                              /* queue       = */ (conf->queue != NULL)
-                                  ? amqp_cstring_bytes(conf->queue)
-                                  : AMQP_EMPTY_BYTES,
-                              /* passive     = */ 0,
-                              /* durable     = */ conf->queue_durable,
-                              /* exclusive   = */ 0,
-                              /* auto_delete = */ conf->queue_auto_delete,
-                              /* arguments   = */ AMQP_EMPTY_TABLE);
+  qd_ret =
+      amqp_queue_declare(conf->connection,
+                         /* channel     = */ CAMQP_CHANNEL,
+                         /* queue       = */
+                         (conf->queue != NULL) ? amqp_cstring_bytes(conf->queue)
+                                               : AMQP_EMPTY_BYTES,
+                         /* passive     = */ 0,
+                         /* durable     = */ conf->queue_durable,
+                         /* exclusive   = */ 0,
+                         /* auto_delete = */ conf->queue_auto_delete,
+                         /* arguments   = */ AMQP_EMPTY_TABLE);
   if (qd_ret == NULL) {
     ERROR("amqp plugin: amqp_queue_declare failed.");
     camqp_close_connection(conf);
@@ -353,15 +366,15 @@ static int camqp_setup_queue(camqp_config_t *conf) /* {{{ */
     amqp_queue_bind_ok_t *qb_ret;
 
     assert(conf->queue != NULL);
-    qb_ret =
-        amqp_queue_bind(conf->connection,
-                        /* channel     = */ CAMQP_CHANNEL,
-                        /* queue       = */ amqp_cstring_bytes(conf->queue),
-                        /* exchange    = */ amqp_cstring_bytes(conf->exchange),
-                        /* routing_key = */ (conf->routing_key != NULL)
-                            ? amqp_cstring_bytes(conf->routing_key)
-                            : AMQP_EMPTY_BYTES,
-                        /* arguments   = */ AMQP_EMPTY_TABLE);
+    qb_ret = amqp_queue_bind(
+        conf->connection,
+        /* channel     = */ CAMQP_CHANNEL,
+        /* queue       = */ amqp_cstring_bytes(conf->queue),
+        /* exchange    = */ amqp_cstring_bytes(conf->exchange),
+        /* routing_key = */
+        (conf->routing_key != NULL) ? amqp_cstring_bytes(conf->routing_key)
+                                    : AMQP_EMPTY_BYTES,
+        /* arguments   = */ AMQP_EMPTY_TABLE);
     if ((qb_ret == NULL) && camqp_is_error(conf)) {
       char errbuf[1024];
       ERROR("amqp plugin: amqp_queue_bind failed: %s",
@@ -396,7 +409,7 @@ static int camqp_setup_queue(camqp_config_t *conf) /* {{{ */
 
 static int camqp_connect(camqp_config_t *conf) /* {{{ */
 {
-  static time_t last_connect_time = 0;
+  static time_t last_connect_time;
 
   amqp_rpc_reply_t reply;
   int status;
@@ -426,25 +439,62 @@ static int camqp_connect(camqp_config_t *conf) /* {{{ */
     return ENOMEM;
   }
 
+  char *host = conf->hosts[cdrand_u() % conf->hosts_count];
+  INFO("amqp plugin: Connecting to %s", host);
+
 #ifdef HAVE_AMQP_TCP_SOCKET
 #define CLOSE_SOCKET() /* amqp_destroy_connection() closes the socket for us   \
-                          */
-  /* TODO: add support for SSL using amqp_ssl_socket_new
-   *       and related functions */
-  socket = amqp_tcp_socket_new(conf->connection);
-  if (!socket) {
-    ERROR("amqp plugin: amqp_tcp_socket_new failed.");
-    amqp_destroy_connection(conf->connection);
-    conf->connection = NULL;
-    return ENOMEM;
+                        */
+
+  if (conf->tls_enabled) {
+    socket = amqp_ssl_socket_new(conf->connection);
+    if (!socket) {
+      ERROR("amqp plugin: amqp_ssl_socket_new failed.");
+      amqp_destroy_connection(conf->connection);
+      conf->connection = NULL;
+      return ENOMEM;
+    }
+
+#if AMQP_VERSION >= 0x00080000
+    amqp_ssl_socket_set_verify_peer(socket, conf->tls_verify_peer);
+    amqp_ssl_socket_set_verify_hostname(socket, conf->tls_verify_hostname);
+#endif
+
+    if (conf->tls_cacert) {
+      status = amqp_ssl_socket_set_cacert(socket, conf->tls_cacert);
+      if (status < 0) {
+        ERROR("amqp plugin: amqp_ssl_socket_set_cacert failed: %s",
+              amqp_error_string2(status));
+        amqp_destroy_connection(conf->connection);
+        conf->connection = NULL;
+        return status;
+      }
+    }
+    if (conf->tls_client_cert && conf->tls_client_key) {
+      status = amqp_ssl_socket_set_key(socket, conf->tls_client_cert,
+                                       conf->tls_client_key);
+      if (status < 0) {
+        ERROR("amqp plugin: amqp_ssl_socket_set_key failed: %s",
+              amqp_error_string2(status));
+        amqp_destroy_connection(conf->connection);
+        conf->connection = NULL;
+        return status;
+      }
+    }
+  } else {
+    socket = amqp_tcp_socket_new(conf->connection);
+    if (!socket) {
+      ERROR("amqp plugin: amqp_tcp_socket_new failed.");
+      amqp_destroy_connection(conf->connection);
+      conf->connection = NULL;
+      return ENOMEM;
+    }
   }
 
-  status = amqp_socket_open(socket, CONF(conf, host), conf->port);
+  status = amqp_socket_open(socket, host, conf->port);
   if (status < 0) {
-    char errbuf[1024];
-    status *= -1;
     ERROR("amqp plugin: amqp_socket_open failed: %s",
-          sstrerror(status, errbuf, sizeof(errbuf)));
+          amqp_error_string2(status));
     amqp_destroy_connection(conf->connection);
     conf->connection = NULL;
     return status;
@@ -452,12 +502,10 @@ static int camqp_connect(camqp_config_t *conf) /* {{{ */
 #else /* HAVE_AMQP_TCP_SOCKET */
 #define CLOSE_SOCKET() close(sockfd)
   /* this interface is deprecated as of rabbitmq-c 0.4 */
-  sockfd = amqp_open_socket(CONF(conf, host), conf->port);
+  sockfd = amqp_open_socket(host, conf->port);
   if (sockfd < 0) {
-    char errbuf[1024];
     status = (-1) * sockfd;
-    ERROR("amqp plugin: amqp_open_socket failed: %s",
-          sstrerror(status, errbuf, sizeof(errbuf)));
+    ERROR("amqp plugin: amqp_open_socket failed: %s", STRERROR(status));
     amqp_destroy_connection(conf->connection);
     conf->connection = NULL;
     return status;
@@ -494,7 +542,7 @@ static int camqp_connect(camqp_config_t *conf) /* {{{ */
 
   INFO("amqp plugin: Successfully opened connection to vhost \"%s\" "
        "on %s:%i.",
-       CONF(conf, vhost), CONF(conf, host), conf->port);
+       CONF(conf, vhost), host, conf->port);
 
   status = camqp_create_exchange(conf);
   if (status != 0)
@@ -507,7 +555,7 @@ static int camqp_connect(camqp_config_t *conf) /* {{{ */
 
 static int camqp_shutdown(void) /* {{{ */
 {
-  DEBUG("amqp plugin: Shutting down %zu subscriber threads.",
+  DEBUG("amqp plugin: Shutting down %" PRIsz " subscriber threads.",
         subscriber_threads_num);
 
   subscriber_threads_running = 0;
@@ -545,10 +593,8 @@ static int camqp_read_body(camqp_config_t *conf, /* {{{ */
   while (received < body_size) {
     status = amqp_simple_wait_frame(conf->connection, &frame);
     if (status < 0) {
-      char errbuf[1024];
       status = (-1) * status;
-      ERROR("amqp plugin: amqp_simple_wait_frame failed: %s",
-            sstrerror(status, errbuf, sizeof(errbuf)));
+      ERROR("amqp plugin: amqp_simple_wait_frame failed: %s", STRERROR(status));
       camqp_close_connection(conf);
       return status;
     }
@@ -597,10 +643,8 @@ static int camqp_read_header(camqp_config_t *conf) /* {{{ */
 
   status = amqp_simple_wait_frame(conf->connection, &frame);
   if (status < 0) {
-    char errbuf[1024];
     status = (-1) * status;
-    ERROR("amqp plugin: amqp_simple_wait_frame failed: %s",
-          sstrerror(status, errbuf, sizeof(errbuf)));
+    ERROR("amqp plugin: amqp_simple_wait_frame failed: %s", STRERROR(status));
     camqp_close_connection(conf);
     return status;
   }
@@ -690,12 +734,10 @@ static int camqp_subscribe_init(camqp_config_t *conf) /* {{{ */
   tmp = subscriber_threads + subscriber_threads_num;
   memset(tmp, 0, sizeof(*tmp));
 
-  status = plugin_thread_create(tmp, /* attr = */ NULL, camqp_subscribe_thread,
-                                conf, "amqp subscribe");
+  status =
+      plugin_thread_create(tmp, camqp_subscribe_thread, conf, "amqp subscribe");
   if (status != 0) {
-    char errbuf[1024];
-    ERROR("amqp plugin: pthread_create failed: %s",
-          sstrerror(status, errbuf, sizeof(errbuf)));
+    ERROR("amqp plugin: pthread_create failed: %s", STRERROR(status));
     return status;
   }
 
@@ -758,9 +800,9 @@ static int camqp_write(const data_set_t *ds, const value_list_t *vl, /* {{{ */
   if (conf->routing_key != NULL) {
     sstrncpy(routing_key, conf->routing_key, sizeof(routing_key));
   } else {
-    snprintf(routing_key, sizeof(routing_key), "collectd/%s/%s/%s/%s/%s",
-             vl->host, vl->plugin, vl->plugin_instance, vl->type,
-             vl->type_instance);
+    ssnprintf(routing_key, sizeof(routing_key), "collectd/%s/%s/%s/%s/%s",
+              vl->host, vl->plugin, vl->plugin_instance, vl->type,
+              vl->type_instance);
 
     /* Switch slashes (the only character forbidden by collectd) and dots
      * (the separation character used by AMQP). */
@@ -835,7 +877,7 @@ static int camqp_config_set_format(oconfig_item_t *ci, /* {{{ */
 } /* }}} int config_set_string */
 
 static int camqp_config_connection(oconfig_item_t *ci, /* {{{ */
-                                   _Bool publish) {
+                                   bool publish) {
   camqp_config_t *conf;
   int status;
 
@@ -849,18 +891,25 @@ static int camqp_config_connection(oconfig_item_t *ci, /* {{{ */
   conf->publish = publish;
   conf->name = NULL;
   conf->format = CAMQP_FORMAT_COMMAND;
-  conf->host = NULL;
+  conf->hosts = NULL;
+  conf->hosts_count = 0;
   conf->port = 5672;
   conf->vhost = NULL;
   conf->user = NULL;
   conf->password = NULL;
+  conf->tls_enabled = false;
+  conf->tls_verify_peer = true;
+  conf->tls_verify_hostname = true;
+  conf->tls_cacert = NULL;
+  conf->tls_client_cert = NULL;
+  conf->tls_client_key = NULL;
   conf->exchange = NULL;
   conf->routing_key = NULL;
   conf->connection_retry_delay = 0;
 
   /* publish only */
   conf->delivery_mode = CAMQP_DM_VOLATILE;
-  conf->store_rates = 0;
+  conf->store_rates = false;
   conf->graphite_flags = 0;
   /* publish & graphite only */
   conf->prefix = NULL;
@@ -869,8 +918,8 @@ static int camqp_config_connection(oconfig_item_t *ci, /* {{{ */
   /* subscribe only */
   conf->exchange_type = NULL;
   conf->queue = NULL;
-  conf->queue_durable = 0;
-  conf->queue_auto_delete = 1;
+  conf->queue_durable = false;
+  conf->queue_auto_delete = true;
   /* general */
   conf->connection = NULL;
   pthread_mutex_init(&conf->lock, /* attr = */ NULL);
@@ -885,9 +934,22 @@ static int camqp_config_connection(oconfig_item_t *ci, /* {{{ */
   for (int i = 0; i < ci->children_num; i++) {
     oconfig_item_t *child = ci->children + i;
 
-    if (strcasecmp("Host", child->key) == 0)
-      status = cf_util_get_string(child, &conf->host);
-    else if (strcasecmp("Port", child->key) == 0) {
+    if (strcasecmp("Host", child->key) == 0) {
+      for (int j = 0; j < child->values_num; j++) {
+        if (child->values[j].type != OCONFIG_TYPE_STRING) {
+          status = EINVAL;
+          ERROR("amqp plugin: Host arguments must be strings");
+          break;
+        }
+
+        status = strarray_add(&conf->hosts, &conf->hosts_count,
+                              child->values[j].value.string);
+        if (status) {
+          ERROR("amqp plugin: Host configuration failed: %d", status);
+          break;
+        }
+      }
+    } else if (strcasecmp("Port", child->key) == 0) {
       status = cf_util_get_port_number(child);
       if (status > 0) {
         conf->port = status;
@@ -899,6 +961,18 @@ static int camqp_config_connection(oconfig_item_t *ci, /* {{{ */
       status = cf_util_get_string(child, &conf->user);
     else if (strcasecmp("Password", child->key) == 0)
       status = cf_util_get_string(child, &conf->password);
+    else if (strcasecmp("TLSEnabled", child->key) == 0)
+      status = cf_util_get_boolean(child, &conf->tls_enabled);
+    else if (strcasecmp("TLSVerifyPeer", child->key) == 0)
+      status = cf_util_get_boolean(child, &conf->tls_verify_peer);
+    else if (strcasecmp("TLSVerifyHostName", child->key) == 0)
+      status = cf_util_get_boolean(child, &conf->tls_verify_hostname);
+    else if (strcasecmp("TLSCACert", child->key) == 0)
+      status = cf_util_get_string(child, &conf->tls_cacert);
+    else if (strcasecmp("TLSClientCert", child->key) == 0)
+      status = cf_util_get_string(child, &conf->tls_client_cert);
+    else if (strcasecmp("TLSClientKey", child->key) == 0)
+      status = cf_util_get_string(child, &conf->tls_client_key);
     else if (strcasecmp("Exchange", child->key) == 0)
       status = cf_util_get_string(child, &conf->exchange);
     else if (strcasecmp("ExchangeType", child->key) == 0)
@@ -912,7 +986,7 @@ static int camqp_config_connection(oconfig_item_t *ci, /* {{{ */
     else if (strcasecmp("RoutingKey", child->key) == 0)
       status = cf_util_get_string(child, &conf->routing_key);
     else if ((strcasecmp("Persistent", child->key) == 0) && publish) {
-      _Bool tmp = 0;
+      bool tmp = 0;
       status = cf_util_get_boolean(child, &tmp);
       if (tmp)
         conf->delivery_mode = CAMQP_DM_PERSISTENT;
@@ -958,6 +1032,12 @@ static int camqp_config_connection(oconfig_item_t *ci, /* {{{ */
       break;
   } /* for (i = 0; i < ci->children_num; i++) */
 
+  if (status == 0 && conf->hosts_count == 0) {
+    status = strarray_add(&conf->hosts, &conf->hosts_count, "localhost");
+    if (status)
+      ERROR("amqp plugin: Host configuration failed: %d", status);
+  }
+
   if ((status == 0) && (conf->exchange == NULL)) {
     if (conf->exchange_type != NULL)
       WARNING("amqp plugin: The option \"ExchangeType\" was given "
@@ -966,6 +1046,29 @@ static int camqp_config_connection(oconfig_item_t *ci, /* {{{ */
     if (!publish && (conf->routing_key != NULL))
       WARNING("amqp plugin: The option \"RoutingKey\" was given "
               "without the \"Exchange\" option. It will be ignored.");
+  }
+
+#if !defined(AMQP_VERSION) || AMQP_VERSION < 0x00040000
+  if (status == 0 && conf->tls_enabled) {
+    ERROR("amqp plugin: TLSEnabled is set but not supported. "
+          "rebuild collectd with rabbitmq-c >= 0.4");
+    status = 1;
+  }
+#endif
+#if !defined(AMQP_VERSION) || AMQP_VERSION < 0x00080000
+  if (status == 0 && (!conf->tls_verify_peer || !conf->tls_verify_hostname)) {
+    ERROR("amqp plugin: disabling TLSVerify* is not supported. "
+          "rebuild collectd with rabbitmq-c >= 0.8");
+    status = 1;
+  }
+#endif
+  if (status == 0 &&
+      (conf->tls_client_cert != NULL || conf->tls_client_key != NULL)) {
+    if (conf->tls_client_cert == NULL || conf->tls_client_key == NULL) {
+      ERROR("amqp plugin: only one of TLSClientCert/TLSClientKey is "
+            "configured. need both or neither.");
+      status = 1;
+    }
   }
 
   if (status != 0) {
@@ -980,12 +1083,13 @@ static int camqp_config_connection(oconfig_item_t *ci, /* {{{ */
 
   if (publish) {
     char cbname[128];
-    snprintf(cbname, sizeof(cbname), "amqp/%s", conf->name);
+    ssnprintf(cbname, sizeof(cbname), "amqp/%s", conf->name);
 
-    status = plugin_register_write(
-        cbname, camqp_write, &(user_data_t){
-                                 .data = conf, .free_func = camqp_config_free,
-                             });
+    status = plugin_register_write(cbname, camqp_write,
+                                   &(user_data_t){
+                                       .data = conf,
+                                       .free_func = camqp_config_free,
+                                   });
     if (status != 0) {
       camqp_config_free(conf);
       return status;
@@ -1007,9 +1111,9 @@ static int camqp_config(oconfig_item_t *ci) /* {{{ */
     oconfig_item_t *child = ci->children + i;
 
     if (strcasecmp("Publish", child->key) == 0)
-      camqp_config_connection(child, /* publish = */ 1);
+      camqp_config_connection(child, /* publish = */ true);
     else if (strcasecmp("Subscribe", child->key) == 0)
-      camqp_config_connection(child, /* publish = */ 0);
+      camqp_config_connection(child, /* publish = */ false);
     else
       WARNING("amqp plugin: Ignoring unknown config option \"%s\".",
               child->key);

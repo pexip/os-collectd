@@ -25,10 +25,12 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 
-#ifdef HAVE_SYS_SYSCTL_H
+#if (defined(HAVE_SYS_SYSCTL_H) && defined(HAVE_SYSCTLBYNAME)) ||              \
+    defined(__OpenBSD__)
+/* Implies BSD variant */
 #include <sys/sysctl.h>
 #endif
 #ifdef HAVE_SYS_VMMETER_H
@@ -67,7 +69,12 @@ static vm_size_t pagesize;
 /* #endif HAVE_HOST_STATISTICS */
 
 #elif HAVE_SYSCTLBYNAME
+#if HAVE_SYSCTL && defined(KERNEL_NETBSD)
+static int pagesize;
+#include <unistd.h> /* getpagesize() */
+#else
 /* no global variables */
+#endif
 /* #endif HAVE_SYSCTLBYNAME */
 
 #elif KERNEL_LINUX
@@ -80,9 +87,10 @@ static kstat_t *ksp;
 static kstat_t *ksz;
 /* #endif HAVE_LIBKSTAT */
 
-#elif HAVE_SYSCTL
+#elif HAVE_SYSCTL && __OpenBSD__
+/* OpenBSD variant does not have sysctlbyname */
 static int pagesize;
-/* #endif HAVE_SYSCTL */
+/* #endif HAVE_SYSCTL && __OpenBSD__ */
 
 #elif HAVE_LIBSTATGRAB
 /* no global variables */
@@ -94,8 +102,12 @@ static int pagesize;
 #error "No applicable input method."
 #endif
 
-static _Bool values_absolute = 1;
-static _Bool values_percentage = 0;
+#if KERNEL_NETBSD
+#include <uvm/uvm_extern.h>
+#endif
+
+static bool values_absolute = true;
+static bool values_percentage;
 
 static int memory_config(oconfig_item_t *ci) /* {{{ */
 {
@@ -118,15 +130,19 @@ static int memory_init(void) {
 #if HAVE_HOST_STATISTICS
   port_host = mach_host_self();
   host_page_size(port_host, &pagesize);
-/* #endif HAVE_HOST_STATISTICS */
+  /* #endif HAVE_HOST_STATISTICS */
 
 #elif HAVE_SYSCTLBYNAME
+#if HAVE_SYSCTL && defined(KERNEL_NETBSD)
+  pagesize = getpagesize();
+#else
 /* no init stuff */
-/* #endif HAVE_SYSCTLBYNAME */
+#endif /* HAVE_SYSCTL && defined(KERNEL_NETBSD) */
+  /* #endif HAVE_SYSCTLBYNAME */
 
 #elif defined(KERNEL_LINUX)
-/* no init stuff */
-/* #endif KERNEL_LINUX */
+  /* no init stuff */
+  /* #endif KERNEL_LINUX */
 
 #elif defined(HAVE_LIBKSTAT)
   /* getpagesize(3C) tells me this does not fail.. */
@@ -140,19 +156,20 @@ static int memory_init(void) {
     return -1;
   }
 
-/* #endif HAVE_LIBKSTAT */
+  /* #endif HAVE_LIBKSTAT */
 
-#elif HAVE_SYSCTL
+#elif HAVE_SYSCTL && __OpenBSD__
+  /* OpenBSD variant does not have sysctlbyname */
   pagesize = getpagesize();
   if (pagesize <= 0) {
     ERROR("memory plugin: Invalid pagesize: %i", pagesize);
     return -1;
   }
-/* #endif HAVE_SYSCTL */
+  /* #endif HAVE_SYSCTL && __OpenBSD__ */
 
 #elif HAVE_LIBSTATGRAB
-/* no init stuff */
-/* #endif HAVE_LIBSTATGRAB */
+  /* no init stuff */
+  /* #endif HAVE_LIBSTATGRAB */
 
 #elif HAVE_PERFSTAT
   pagesize = getpagesize();
@@ -163,9 +180,9 @@ static int memory_init(void) {
 #define MEMORY_SUBMIT(...)                                                     \
   do {                                                                         \
     if (values_absolute)                                                       \
-      plugin_dispatch_multivalue(vl, 0, DS_TYPE_GAUGE, __VA_ARGS__, NULL);     \
+      plugin_dispatch_multivalue(vl, false, DS_TYPE_GAUGE, __VA_ARGS__, NULL); \
     if (values_percentage)                                                     \
-      plugin_dispatch_multivalue(vl, 1, DS_TYPE_GAUGE, __VA_ARGS__, NULL);     \
+      plugin_dispatch_multivalue(vl, true, DS_TYPE_GAUGE, __VA_ARGS__, NULL);  \
   } while (0)
 
 static int memory_read_internal(value_list_t *vl) {
@@ -218,9 +235,44 @@ static int memory_read_internal(value_list_t *vl) {
 
   MEMORY_SUBMIT("wired", wired, "active", active, "inactive", inactive, "free",
                 free);
-/* #endif HAVE_HOST_STATISTICS */
+  /* #endif HAVE_HOST_STATISTICS */
 
 #elif HAVE_SYSCTLBYNAME
+
+#if HAVE_SYSCTL && defined(KERNEL_NETBSD)
+  int mib[] = {CTL_VM, VM_UVMEXP2};
+  struct uvmexp_sysctl uvmexp;
+  gauge_t mem_active;
+  gauge_t mem_inactive;
+  gauge_t mem_free;
+  gauge_t mem_wired;
+  gauge_t mem_kernel;
+  size_t size;
+
+  memset(&uvmexp, 0, sizeof(uvmexp));
+  size = sizeof(uvmexp);
+
+  if (sysctl(mib, 2, &uvmexp, &size, NULL, 0) < 0) {
+    char errbuf[1024];
+    WARNING("memory plugin: sysctl failed: %s",
+            sstrerror(errno, errbuf, sizeof(errbuf)));
+    return (-1);
+  }
+
+  assert(pagesize > 0);
+  mem_active = (gauge_t)(uvmexp.active * pagesize);
+  mem_inactive = (gauge_t)(uvmexp.inactive * pagesize);
+  mem_free = (gauge_t)(uvmexp.free * pagesize);
+  mem_wired = (gauge_t)(uvmexp.wired * pagesize);
+  mem_kernel = (gauge_t)((uvmexp.npages - (uvmexp.active + uvmexp.inactive +
+                                           uvmexp.free + uvmexp.wired)) *
+                         pagesize);
+
+  MEMORY_SUBMIT("active", mem_active, "inactive", mem_inactive, "free",
+                mem_free, "wired", mem_wired, "kernel", mem_kernel);
+  /* #endif HAVE_SYSCTL && defined(KERNEL_NETBSD) */
+
+#else /* Other HAVE_SYSCTLBYNAME providers */
   /*
    * vm.stats.vm.v_page_size: 4096
    * vm.stats.vm.v_page_count: 246178
@@ -259,7 +311,9 @@ static int memory_read_internal(value_list_t *vl) {
                 (gauge_t)sysctl_vals[3], "active", (gauge_t)sysctl_vals[4],
                 "inactive", (gauge_t)sysctl_vals[5], "cache",
                 (gauge_t)sysctl_vals[6]);
-/* #endif HAVE_SYSCTLBYNAME */
+
+#endif /* HAVE_SYSCTL && KERNEL_NETBSD */
+  /* #endif HAVE_SYSCTLBYNAME */
 
 #elif KERNEL_LINUX
   FILE *fh;
@@ -268,7 +322,7 @@ static int memory_read_internal(value_list_t *vl) {
   char *fields[8];
   int numfields;
 
-  _Bool detailed_slab_info = 0;
+  bool detailed_slab_info = false;
 
   gauge_t mem_total = 0;
   gauge_t mem_used = 0;
@@ -280,8 +334,7 @@ static int memory_read_internal(value_list_t *vl) {
   gauge_t mem_slab_unreclaimable = 0;
 
   if ((fh = fopen("/proc/meminfo", "r")) == NULL) {
-    char errbuf[1024];
-    WARNING("memory: fopen: %s", sstrerror(errno, errbuf, sizeof(errbuf)));
+    WARNING("memory: fopen: %s", STRERRNO);
     return -1;
   }
 
@@ -300,10 +353,10 @@ static int memory_read_internal(value_list_t *vl) {
       val = &mem_slab_total;
     else if (strncasecmp(buffer, "SReclaimable:", 13) == 0) {
       val = &mem_slab_reclaimable;
-      detailed_slab_info = 1;
+      detailed_slab_info = true;
     } else if (strncasecmp(buffer, "SUnreclaim:", 11) == 0) {
       val = &mem_slab_unreclaimable;
-      detailed_slab_info = 1;
+      detailed_slab_info = true;
     } else
       continue;
 
@@ -315,8 +368,7 @@ static int memory_read_internal(value_list_t *vl) {
   }
 
   if (fclose(fh)) {
-    char errbuf[1024];
-    WARNING("memory: fclose: %s", sstrerror(errno, errbuf, sizeof(errbuf)));
+    WARNING("memory: fclose: %s", STRERRNO);
   }
 
   if (mem_total < (mem_free + mem_buffered + mem_cached + mem_slab_total))
@@ -336,7 +388,7 @@ static int memory_read_internal(value_list_t *vl) {
   else
     MEMORY_SUBMIT("used", mem_used, "buffered", mem_buffered, "cached",
                   mem_cached, "free", mem_free, "slab", mem_slab_total);
-/* #endif KERNEL_LINUX */
+    /* #endif KERNEL_LINUX */
 
 #elif HAVE_LIBKSTAT
   /* Most of the additions here were taken as-is from the k9toolkit from
@@ -408,9 +460,10 @@ static int memory_read_internal(value_list_t *vl) {
   MEMORY_SUBMIT("used", (gauge_t)mem_used, "free", (gauge_t)mem_free, "locked",
                 (gauge_t)mem_lock, "kernel", (gauge_t)mem_kern, "arc",
                 (gauge_t)arcsize, "unusable", (gauge_t)mem_unus);
-/* #endif HAVE_LIBKSTAT */
+  /* #endif HAVE_LIBKSTAT */
 
-#elif HAVE_SYSCTL
+#elif HAVE_SYSCTL && __OpenBSD__
+  /* OpenBSD variant does not have HAVE_SYSCTLBYNAME */
   int mib[] = {CTL_VM, VM_METER};
   struct vmtotal vmtotal = {0};
   gauge_t mem_active;
@@ -421,9 +474,7 @@ static int memory_read_internal(value_list_t *vl) {
   size = sizeof(vmtotal);
 
   if (sysctl(mib, 2, &vmtotal, &size, NULL, 0) < 0) {
-    char errbuf[1024];
-    WARNING("memory plugin: sysctl failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+    WARNING("memory plugin: sysctl failed: %s", STRERRNO);
     return -1;
   }
 
@@ -434,7 +485,7 @@ static int memory_read_internal(value_list_t *vl) {
 
   MEMORY_SUBMIT("active", mem_active, "inactive", mem_inactive, "free",
                 mem_free);
-/* #endif HAVE_SYSCTL */
+  /* #endif HAVE_SYSCTL && __OpenBSD__ */
 
 #elif HAVE_LIBSTATGRAB
   sg_mem_stats *ios;
@@ -445,15 +496,13 @@ static int memory_read_internal(value_list_t *vl) {
 
   MEMORY_SUBMIT("used", (gauge_t)ios->used, "cached", (gauge_t)ios->cache,
                 "free", (gauge_t)ios->free);
-/* #endif HAVE_LIBSTATGRAB */
+  /* #endif HAVE_LIBSTATGRAB */
 
 #elif HAVE_PERFSTAT
   perfstat_memory_total_t pmemory = {0};
 
   if (perfstat_memory_total(NULL, &pmemory, sizeof(pmemory), 1) < 0) {
-    char errbuf[1024];
-    WARNING("memory plugin: perfstat_memory_total failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+    WARNING("memory plugin: perfstat_memory_total failed: %s", STRERRNO);
     return -1;
   }
 

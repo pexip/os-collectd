@@ -27,8 +27,8 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 #include "utils_cache.h"
 #include "utils_complain.h"
 #include "utils_fbhash.h"
@@ -113,6 +113,7 @@ struct sockent_client {
 #endif
   cdtime_t next_resolve_reconnect;
   cdtime_t resolve_interval;
+  struct sockaddr_storage *bind_addr;
 };
 
 struct sockent_server {
@@ -141,6 +142,7 @@ typedef struct sockent {
   } data;
 
   struct sockent *next;
+  pthread_mutex_t lock;
 } sockent_t;
 
 /*                      1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
@@ -254,6 +256,7 @@ struct receive_list_entry_s {
   char *data;
   int data_len;
   int fd;
+  struct sockaddr_storage sender;
   struct receive_list_entry_s *next;
 };
 typedef struct receive_list_entry_s receive_list_entry_t;
@@ -261,30 +264,30 @@ typedef struct receive_list_entry_s receive_list_entry_t;
 /*
  * Private variables
  */
-static int network_config_ttl = 0;
+static int network_config_ttl;
 /* Ethernet - (IPv6 + UDP) = 1500 - (40 + 8) = 1452 */
 static size_t network_config_packet_size = 1452;
-static _Bool network_config_forward = 0;
-static _Bool network_config_stats = 0;
+static bool network_config_forward;
+static bool network_config_stats;
 
-static sockent_t *sending_sockets = NULL;
+static sockent_t *sending_sockets;
 
-static receive_list_entry_t *receive_list_head = NULL;
-static receive_list_entry_t *receive_list_tail = NULL;
+static receive_list_entry_t *receive_list_head;
+static receive_list_entry_t *receive_list_tail;
 static pthread_mutex_t receive_list_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t receive_list_cond = PTHREAD_COND_INITIALIZER;
-static uint64_t receive_list_length = 0;
+static uint64_t receive_list_length;
 
-static sockent_t *listen_sockets = NULL;
-static struct pollfd *listen_sockets_pollfd = NULL;
-static size_t listen_sockets_num = 0;
+static sockent_t *listen_sockets;
+static struct pollfd *listen_sockets_pollfd;
+static size_t listen_sockets_num;
 
 /* The receive and dispatch threads will run as long as `listen_loop' is set to
  * zero. */
-static int listen_loop = 0;
-static int receive_thread_running = 0;
+static int listen_loop;
+static int receive_thread_running;
 static pthread_t receive_thread_id;
-static int dispatch_thread_running = 0;
+static int dispatch_thread_running;
 static pthread_t dispatch_thread_id;
 
 /* Buffer in which to-be-sent network packets are constructed. */
@@ -301,20 +304,20 @@ static pthread_mutex_t send_buffer_lock = PTHREAD_MUTEX_INITIALIZER;
  * example). Only if neither is true, the stats_lock is acquired. The counters
  * are always read without holding a lock in the hope that writing 8 bytes to
  * memory is an atomic operation. */
-static derive_t stats_octets_rx = 0;
-static derive_t stats_octets_tx = 0;
-static derive_t stats_packets_rx = 0;
-static derive_t stats_packets_tx = 0;
-static derive_t stats_values_dispatched = 0;
-static derive_t stats_values_not_dispatched = 0;
-static derive_t stats_values_sent = 0;
-static derive_t stats_values_not_sent = 0;
+static derive_t stats_octets_rx;
+static derive_t stats_octets_tx;
+static derive_t stats_packets_rx;
+static derive_t stats_packets_tx;
+static derive_t stats_values_dispatched;
+static derive_t stats_values_not_dispatched;
+static derive_t stats_values_sent;
+static derive_t stats_values_not_sent;
 static pthread_mutex_t stats_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * Private functions
  */
-static _Bool check_receive_okay(const value_list_t *vl) /* {{{ */
+static bool check_receive_okay(const value_list_t *vl) /* {{{ */
 {
   uint64_t time_sent = 0;
   int status;
@@ -327,11 +330,11 @@ static _Bool check_receive_okay(const value_list_t *vl) /* {{{ */
     return 0;
 
   return 1;
-} /* }}} _Bool check_receive_okay */
+} /* }}} bool check_receive_okay */
 
-static _Bool check_send_okay(const value_list_t *vl) /* {{{ */
+static bool check_send_okay(const value_list_t *vl) /* {{{ */
 {
-  _Bool received = 0;
+  bool received = 0;
   int status;
 
   if (network_config_forward)
@@ -353,22 +356,22 @@ static _Bool check_send_okay(const value_list_t *vl) /* {{{ */
   /* By default, only *send* value lists that were not *received* by the
    * network plugin. */
   return !received;
-} /* }}} _Bool check_send_okay */
+} /* }}} bool check_send_okay */
 
-static _Bool check_notify_received(const notification_t *n) /* {{{ */
+static bool check_notify_received(const notification_t *n) /* {{{ */
 {
   for (notification_meta_t *ptr = n->meta; ptr != NULL; ptr = ptr->next)
     if ((strcmp("network:received", ptr->name) == 0) &&
         (ptr->type == NM_TYPE_BOOLEAN))
-      return (_Bool)ptr->nm_value.nm_boolean;
+      return (bool)ptr->nm_value.nm_boolean;
 
   return 0;
-} /* }}} _Bool check_notify_received */
+} /* }}} bool check_notify_received */
 
-static _Bool check_send_notify_okay(const notification_t *n) /* {{{ */
+static bool check_send_notify_okay(const notification_t *n) /* {{{ */
 {
   static c_complain_t complain_forwarding = C_COMPLAIN_INIT_STATIC;
-  _Bool received = 0;
+  bool received = 0;
 
   if (n->meta == NULL)
     return 1;
@@ -380,7 +383,7 @@ static _Bool check_send_notify_okay(const notification_t *n) /* {{{ */
         LOG_ERR, &complain_forwarding,
         "network plugin: A notification has been received via the network "
         "and forwarding is enabled. Forwarding of notifications is currently "
-        "not supported, because there is not loop-deteciton available. "
+        "not supported, because there is not loop-detection available. "
         "Please contact the collectd mailing list if you need this "
         "feature.");
   }
@@ -388,10 +391,11 @@ static _Bool check_send_notify_okay(const notification_t *n) /* {{{ */
   /* By default, only *send* value lists that were not *received* by the
    * network plugin. */
   return !received;
-} /* }}} _Bool check_send_notify_okay */
+} /* }}} bool check_send_notify_okay */
 
 static int network_dispatch_values(value_list_t *vl, /* {{{ */
-                                   const char *username) {
+                                   const char *username,
+                                   struct sockaddr_storage *address) {
   int status;
 
   if ((vl->time == 0) || (strlen(vl->host) == 0) || (strlen(vl->plugin) == 0) ||
@@ -402,7 +406,7 @@ static int network_dispatch_values(value_list_t *vl, /* {{{ */
 #if COLLECT_DEBUG
     char name[6 * DATA_MAX_NAME_LEN];
     FORMAT_VL(name, sizeof(name), vl);
-    name[sizeof(name) - 1] = 0;
+    name[sizeof(name) - 1] = '\0';
     DEBUG("network plugin: network_dispatch_values: "
           "NOT dispatching %s.",
           name);
@@ -429,6 +433,27 @@ static int network_dispatch_values(value_list_t *vl, /* {{{ */
 
   if (username != NULL) {
     status = meta_data_add_string(vl->meta, "network:username", username);
+    if (status != 0) {
+      ERROR("network plugin: meta_data_add_string failed.");
+      meta_data_destroy(vl->meta);
+      vl->meta = NULL;
+      return status;
+    }
+  }
+
+  if (address != NULL) {
+    char host[48];
+    status = getnameinfo((struct sockaddr *)address,
+                         sizeof(struct sockaddr_storage), host, sizeof(host),
+                         NULL, 0, NI_NUMERICHOST | NI_NUMERICSERV);
+    if (status != 0) {
+      ERROR("network plugin: getnameinfo failed: %s", gai_strerror(status));
+      meta_data_destroy(vl->meta);
+      vl->meta = NULL;
+      return status;
+    }
+
+    status = meta_data_add_string(vl->meta, "network:ip_address", host);
     if (status != 0) {
       ERROR("network plugin: meta_data_add_string failed.");
       meta_data_destroy(vl->meta);
@@ -753,7 +778,7 @@ static int parse_part_values(void **ret_buffer, size_t *ret_buffer_len,
 
   if (buffer_len < 15) {
     NOTICE("network plugin: packet is too short: "
-           "buffer_len = %zu",
+           "buffer_len = %" PRIsz,
            buffer_len);
     return -1;
   }
@@ -777,8 +802,8 @@ static int parse_part_values(void **ret_buffer, size_t *ret_buffer_len,
   if (buffer_len < exp_size) {
     WARNING("network plugin: parse_part_values: "
             "Packet too short: "
-            "Chunk of size %zu expected, "
-            "but buffer has only %zu bytes left.",
+            "Chunk of size %" PRIsz " expected, "
+            "but buffer has only %" PRIsz " bytes left.",
             exp_size, buffer_len);
     return -1;
   }
@@ -857,8 +882,8 @@ static int parse_part_number(void **ret_buffer, size_t *ret_buffer_len,
   if (buffer_len < exp_size) {
     WARNING("network plugin: parse_part_number: "
             "Packet too short: "
-            "Chunk of size %zu expected, "
-            "but buffer has only %zu bytes left.",
+            "Chunk of size %" PRIsz " expected, "
+            "but buffer has only %" PRIsz " bytes left.",
             exp_size, buffer_len);
     return -1;
   }
@@ -898,8 +923,8 @@ static int parse_part_string(void **ret_buffer, size_t *ret_buffer_len,
   if (buffer_len < header_size) {
     WARNING("network plugin: parse_part_string: "
             "Packet too short: "
-            "Chunk of at least size %zu expected, "
-            "but buffer has only %zu bytes left.",
+            "Chunk of at least size %" PRIsz " expected, "
+            "but buffer has only %" PRIsz " bytes left.",
             header_size, buffer_len);
     return -1;
   }
@@ -918,7 +943,7 @@ static int parse_part_string(void **ret_buffer, size_t *ret_buffer_len,
     WARNING("network plugin: parse_part_string: "
             "Packet too big: "
             "Chunk of size %" PRIu16 " received, "
-            "but buffer has only %zu bytes left.",
+            "but buffer has only %" PRIsz " bytes left.",
             pkg_length, buffer_len);
     return -1;
   }
@@ -939,9 +964,9 @@ static int parse_part_string(void **ret_buffer, size_t *ret_buffer_len,
   if (output_len < payload_size) {
     WARNING("network plugin: parse_part_string: "
             "Buffer too small: "
-            "Output buffer holds %zu bytes, "
+            "Output buffer holds %" PRIsz " bytes, "
             "which is too small to hold the received "
-            "%zu byte string.",
+            "%" PRIsz " byte string.",
             output_len, payload_size);
     return -1;
   }
@@ -970,7 +995,8 @@ static int parse_part_string(void **ret_buffer, size_t *ret_buffer_len,
 #define PP_SIGNED 0x01
 #define PP_ENCRYPTED 0x02
 static int parse_packet(sockent_t *se, void *buffer, size_t buffer_size,
-                        int flags, const char *username);
+                        int flags, const char *username,
+                        struct sockaddr_storage *sender);
 
 #define BUFFER_READ(p, s)                                                      \
   do {                                                                         \
@@ -981,7 +1007,7 @@ static int parse_packet(sockent_t *se, void *buffer, size_t buffer_size,
 #if HAVE_GCRYPT_H
 static int parse_part_sign_sha256(sockent_t *se, /* {{{ */
                                   void **ret_buffer, size_t *ret_buffer_len,
-                                  int flags) {
+                                  int flags, struct sockaddr_storage *sender) {
   static c_complain_t complain_no_users = C_COMPLAIN_INIT_STATIC;
 
   char *buffer;
@@ -1096,7 +1122,7 @@ static int parse_part_sign_sha256(sockent_t *se, /* {{{ */
             pss.username);
   } else {
     parse_packet(se, buffer + buffer_offset, buffer_len - buffer_offset,
-                 flags | PP_SIGNED, pss.username);
+                 flags | PP_SIGNED, pss.username, sender);
   }
 
   sfree(secret);
@@ -1107,13 +1133,13 @@ static int parse_part_sign_sha256(sockent_t *se, /* {{{ */
 
   return 0;
 } /* }}} int parse_part_sign_sha256 */
-/* #endif HAVE_GCRYPT_H */
+  /* #endif HAVE_GCRYPT_H */
 
 #else  /* if !HAVE_GCRYPT_H */
 static int parse_part_sign_sha256(sockent_t *se, /* {{{ */
                                   void **ret_buffer, size_t *ret_buffer_size,
-                                  int flags) {
-  static int warning_has_been_printed = 0;
+                                  int flags, struct sockaddr_storage *sender) {
+  static int warning_has_been_printed;
 
   char *buffer;
   size_t buffer_size;
@@ -1144,7 +1170,7 @@ static int parse_part_sign_sha256(sockent_t *se, /* {{{ */
   }
 
   parse_packet(se, buffer + part_len, buffer_size - part_len, flags,
-               /* username = */ NULL);
+               /* username = */ NULL, sender);
 
   *ret_buffer = buffer + buffer_size;
   *ret_buffer_size = 0;
@@ -1156,7 +1182,7 @@ static int parse_part_sign_sha256(sockent_t *se, /* {{{ */
 #if HAVE_GCRYPT_H
 static int parse_part_encr_aes256(sockent_t *se, /* {{{ */
                                   void **ret_buffer, size_t *ret_buffer_len,
-                                  int flags) {
+                                  int flags, struct sockaddr_storage *sender) {
   char *buffer = *ret_buffer;
   size_t buffer_len = *ret_buffer_len;
   size_t payload_len;
@@ -1252,7 +1278,7 @@ static int parse_part_encr_aes256(sockent_t *se, /* {{{ */
   }
 
   parse_packet(se, buffer + buffer_offset, payload_len, flags | PP_ENCRYPTED,
-               pea.username);
+               pea.username, sender);
 
   /* Update return values */
   *ret_buffer = buffer + part_size;
@@ -1262,13 +1288,13 @@ static int parse_part_encr_aes256(sockent_t *se, /* {{{ */
 
   return 0;
 } /* }}} int parse_part_encr_aes256 */
-/* #endif HAVE_GCRYPT_H */
+  /* #endif HAVE_GCRYPT_H */
 
 #else  /* if !HAVE_GCRYPT_H */
 static int parse_part_encr_aes256(sockent_t *se, /* {{{ */
                                   void **ret_buffer, size_t *ret_buffer_size,
-                                  int flags) {
-  static int warning_has_been_printed = 0;
+                                  int flags, struct sockaddr_storage *sender) {
+  static int warning_has_been_printed;
 
   char *buffer;
   size_t buffer_size;
@@ -1312,7 +1338,8 @@ static int parse_part_encr_aes256(sockent_t *se, /* {{{ */
 
 static int parse_packet(sockent_t *se, /* {{{ */
                         void *buffer, size_t buffer_size, int flags,
-                        const char *username) {
+                        const char *username,
+                        struct sockaddr_storage *address) {
   int status;
 
   value_list_t vl = VALUE_LIST_INIT;
@@ -1346,7 +1373,8 @@ static int parse_packet(sockent_t *se, /* {{{ */
       break;
 
     if (pkg_type == TYPE_ENCR_AES256) {
-      status = parse_part_encr_aes256(se, &buffer, &buffer_size, flags);
+      status =
+          parse_part_encr_aes256(se, &buffer, &buffer_size, flags, address);
       if (status != 0) {
         ERROR("network plugin: Decrypting AES256 "
               "part failed "
@@ -1369,7 +1397,8 @@ static int parse_packet(sockent_t *se, /* {{{ */
     }
 #endif /* HAVE_GCRYPT_H */
     else if (pkg_type == TYPE_SIGN_SHA256) {
-      status = parse_part_sign_sha256(se, &buffer, &buffer_size, flags);
+      status =
+          parse_part_sign_sha256(se, &buffer, &buffer_size, flags, address);
       if (status != 0) {
         ERROR("network plugin: Verifying HMAC-SHA-256 "
               "signature failed "
@@ -1397,7 +1426,7 @@ static int parse_packet(sockent_t *se, /* {{{ */
       if (status != 0)
         break;
 
-      network_dispatch_values(&vl, username);
+      network_dispatch_values(&vl, username, address);
 
       sfree(vl.values);
     } else if (pkg_type == TYPE_TIME) {
@@ -1501,6 +1530,7 @@ static void free_sockent_client(struct sockent_client *sec) /* {{{ */
     sec->fd = -1;
   }
   sfree(sec->addr);
+  sfree(sec->bind_addr);
 #if HAVE_GCRYPT_H
   sfree(sec->username);
   sfree(sec->password);
@@ -1538,6 +1568,7 @@ static void sockent_destroy(sockent_t *se) /* {{{ */
 
     sfree(se->node);
     sfree(se->service);
+    pthread_mutex_destroy(&se->lock);
 
     if (se->type == SOCKENT_TYPE_CLIENT)
       free_sockent_client(&se->data.client);
@@ -1578,9 +1609,7 @@ static int network_set_ttl(const sockent_t *se, const struct addrinfo *ai) {
 
     if (setsockopt(se->data.client.fd, IPPROTO_IP, optname, &network_config_ttl,
                    sizeof(network_config_ttl)) != 0) {
-      char errbuf[1024];
-      ERROR("network plugin: setsockopt (ipv4-ttl): %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("network plugin: setsockopt (ipv4-ttl): %s", STRERRNO);
       return -1;
     }
   } else if (ai->ai_family == AF_INET6) {
@@ -1596,9 +1625,7 @@ static int network_set_ttl(const sockent_t *se, const struct addrinfo *ai) {
 
     if (setsockopt(se->data.client.fd, IPPROTO_IPV6, optname,
                    &network_config_ttl, sizeof(network_config_ttl)) != 0) {
-      char errbuf[1024];
-      ERROR("network plugin: setsockopt(ipv6-ttl): %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("network plugin: setsockopt(ipv6-ttl): %s", STRERRNO);
       return -1;
     }
   }
@@ -1634,9 +1661,7 @@ static int network_set_interface(const sockent_t *se,
 
       if (setsockopt(se->data.client.fd, IPPROTO_IP, IP_MULTICAST_IF, &mreq,
                      sizeof(mreq)) != 0) {
-        char errbuf[1024];
-        ERROR("network plugin: setsockopt (ipv4-multicast-if): %s",
-              sstrerror(errno, errbuf, sizeof(errbuf)));
+        ERROR("network plugin: setsockopt (ipv4-multicast-if): %s", STRERRNO);
         return -1;
       }
 
@@ -1648,9 +1673,7 @@ static int network_set_interface(const sockent_t *se,
     if (IN6_IS_ADDR_MULTICAST(&addr->sin6_addr)) {
       if (setsockopt(se->data.client.fd, IPPROTO_IPV6, IPV6_MULTICAST_IF,
                      &se->interface, sizeof(se->interface)) != 0) {
-        char errbuf[1024];
-        ERROR("network plugin: setsockopt (ipv6-multicast-if): %s",
-              sstrerror(errno, errbuf, sizeof(errbuf)));
+        ERROR("network plugin: setsockopt (ipv6-multicast-if): %s", STRERRNO);
         return -1;
       }
 
@@ -1671,12 +1694,10 @@ static int network_set_interface(const sockent_t *se,
 
     if (setsockopt(se->data.client.fd, SOL_SOCKET, SO_BINDTODEVICE,
                    interface_name, sizeof(interface_name)) == -1) {
-      char errbuf[1024];
-      ERROR("network plugin: setsockopt (bind-if): %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("network plugin: setsockopt (bind-if): %s", STRERRNO);
       return -1;
     }
-/* #endif HAVE_IF_INDEXTONAME && SO_BINDTODEVICE */
+      /* #endif HAVE_IF_INDEXTONAME && SO_BINDTODEVICE */
 
 #else
     WARNING("network plugin: Cannot set the interface on a unicast "
@@ -1693,6 +1714,42 @@ static int network_set_interface(const sockent_t *se,
   return 0;
 } /* }}} network_set_interface */
 
+static int network_bind_socket_to_addr(sockent_t *se,
+                                       const struct addrinfo *ai) {
+
+  if (se->data.client.bind_addr == NULL)
+    return 0;
+
+  DEBUG("network_plugin: fd %i: bind socket to address", se->data.client.fd);
+  char pbuffer[64];
+
+  if (ai->ai_family == AF_INET) {
+    struct sockaddr_in *addr =
+        (struct sockaddr_in *)(se->data.client.bind_addr);
+    inet_ntop(AF_INET, &(addr->sin_addr), pbuffer, 64);
+    DEBUG("network_plugin: binding client socket to ipv4 address: %s", pbuffer);
+    if (bind(se->data.client.fd, (struct sockaddr *)addr, sizeof(*addr)) ==
+        -1) {
+      ERROR("network plugin: failed to bind client socket (ipv4) to %s: %s",
+            pbuffer, STRERRNO);
+      return -1;
+    }
+  } else if (ai->ai_family == AF_INET6) {
+    struct sockaddr_in6 *addr =
+        (struct sockaddr_in6 *)(se->data.client.bind_addr);
+    inet_ntop(AF_INET6, &(addr->sin6_addr), pbuffer, 64);
+    DEBUG("network_plugin: binding client socket to ipv6 address: %s", pbuffer);
+    if (bind(se->data.client.fd, (struct sockaddr *)addr, sizeof(*addr)) ==
+        -1) {
+      ERROR("network plugin: failed to bind client socket (ipv6) to %s: %s",
+            pbuffer, STRERRNO);
+      return -1;
+    }
+  }
+
+  return 0;
+} /* int network_bind_socket_to_addr */
+
 static int network_bind_socket(int fd, const struct addrinfo *ai,
                                const int interface_idx) {
 #if KERNEL_SOLARIS
@@ -1700,21 +1757,17 @@ static int network_bind_socket(int fd, const struct addrinfo *ai,
 #else
   int loop = 0;
 #endif
-  int yes = 1;
 
   /* allow multiple sockets to use the same PORT number */
-  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
-    char errbuf[1024];
-    ERROR("network plugin: setsockopt (reuseaddr): %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) == -1) {
+    ERROR("network plugin: setsockopt (reuseaddr): %s", STRERRNO);
     return -1;
   }
 
   DEBUG("fd = %i; calling `bind'", fd);
 
   if (bind(fd, ai->ai_addr, ai->ai_addrlen) == -1) {
-    char errbuf[1024];
-    ERROR("bind: %s", sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("bind: %s", STRERRNO);
     return -1;
   }
 
@@ -1742,17 +1795,13 @@ static int network_bind_socket(int fd, const struct addrinfo *ai,
 
       if (setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop)) ==
           -1) {
-        char errbuf[1024];
-        ERROR("network plugin: setsockopt (multicast-loop): %s",
-              sstrerror(errno, errbuf, sizeof(errbuf)));
+        ERROR("network plugin: setsockopt (multicast-loop): %s", STRERRNO);
         return -1;
       }
 
       if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) ==
           -1) {
-        char errbuf[1024];
-        ERROR("network plugin: setsockopt (add-membership): %s",
-              sstrerror(errno, errbuf, sizeof(errbuf)));
+        ERROR("network plugin: setsockopt (add-membership): %s", STRERRNO);
         return -1;
       }
 
@@ -1782,17 +1831,13 @@ static int network_bind_socket(int fd, const struct addrinfo *ai,
 
       if (setsockopt(fd, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &loop,
                      sizeof(loop)) == -1) {
-        char errbuf[1024];
-        ERROR("network plugin: setsockopt (ipv6-multicast-loop): %s",
-              sstrerror(errno, errbuf, sizeof(errbuf)));
+        ERROR("network plugin: setsockopt (ipv6-multicast-loop): %s", STRERRNO);
         return -1;
       }
 
       if (setsockopt(fd, IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP, &mreq,
                      sizeof(mreq)) == -1) {
-        char errbuf[1024];
-        ERROR("network plugin: setsockopt (ipv6-add-membership): %s",
-              sstrerror(errno, errbuf, sizeof(errbuf)));
+        ERROR("network plugin: setsockopt (ipv6-add-membership): %s", STRERRNO);
         return -1;
       }
 
@@ -1815,9 +1860,7 @@ static int network_bind_socket(int fd, const struct addrinfo *ai,
 
     if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, interface_name,
                    sizeof(interface_name)) == -1) {
-      char errbuf[1024];
-      ERROR("network plugin: setsockopt (bind-if): %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("network plugin: setsockopt (bind-if): %s", STRERRNO);
       return -1;
     }
   }
@@ -1844,6 +1887,7 @@ static sockent_t *sockent_create(int type) /* {{{ */
   se->service = NULL;
   se->interface = 0;
   se->next = NULL;
+  pthread_mutex_init(&se->lock, NULL);
 
   if (type == SOCKENT_TYPE_SERVER) {
     se->data.server.fd = NULL;
@@ -1857,6 +1901,7 @@ static sockent_t *sockent_create(int type) /* {{{ */
   } else {
     se->data.client.fd = -1;
     se->data.client.addr = NULL;
+    se->data.client.bind_addr = NULL;
     se->data.client.resolve_interval = 0;
     se->data.client.next_resolve_reconnect = 0;
 #if HAVE_GCRYPT_H
@@ -1934,6 +1979,8 @@ static int sockent_client_disconnect(sockent_t *se) /* {{{ */
     client->fd = -1;
   }
 
+  DEBUG("network plugin: free (se = %p, addr = %p);", (void *)se,
+        (void *)client->addr);
   sfree(client->addr);
   client->addrlen = 0;
 
@@ -1947,7 +1994,7 @@ static int sockent_client_connect(sockent_t *se) /* {{{ */
   struct sockent_client *client;
   struct addrinfo *ai_list;
   int status;
-  _Bool reconnect = 0;
+  bool reconnect = false;
   cdtime_t now;
 
   if ((se == NULL) || (se->type != SOCKENT_TYPE_CLIENT))
@@ -1961,7 +2008,7 @@ static int sockent_client_connect(sockent_t *se) /* {{{ */
           "next_resolve_reconnect = %lf",
           CDTIME_T_TO_DOUBLE(client->resolve_interval),
           CDTIME_T_TO_DOUBLE(client->next_resolve_reconnect));
-    reconnect = 1;
+    reconnect = true;
   }
 
   if (client->fd >= 0 && !reconnect) /* already connected and not stale*/
@@ -1994,9 +2041,7 @@ static int sockent_client_connect(sockent_t *se) /* {{{ */
     client->fd =
         socket(ai_ptr->ai_family, ai_ptr->ai_socktype, ai_ptr->ai_protocol);
     if (client->fd < 0) {
-      char errbuf[1024];
-      ERROR("network plugin: socket(2) failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("network plugin: socket(2) failed: %s", STRERRNO);
       continue;
     }
 
@@ -2007,6 +2052,8 @@ static int sockent_client_connect(sockent_t *se) /* {{{ */
       client->fd = -1;
       continue;
     }
+    DEBUG("network plugin: alloc (se = %p, addr = %p);", (void *)se,
+          (void *)client->addr);
 
     assert(sizeof(*client->addr) >= ai_ptr->ai_addrlen);
     memcpy(client->addr, ai_ptr->ai_addr, ai_ptr->ai_addrlen);
@@ -2014,6 +2061,7 @@ static int sockent_client_connect(sockent_t *se) /* {{{ */
 
     network_set_ttl(se, ai_ptr);
     network_set_interface(se, ai_ptr);
+    network_bind_socket_to_addr(se, ai_ptr);
 
     /* We don't open more than one write-socket per
      * node/service pair.. */
@@ -2081,9 +2129,7 @@ static int sockent_server_listen(sockent_t *se) /* {{{ */
 
     *tmp = socket(ai_ptr->ai_family, ai_ptr->ai_socktype, ai_ptr->ai_protocol);
     if (*tmp < 0) {
-      char errbuf[1024];
-      ERROR("network plugin: socket(2) failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("network plugin: socket(2) failed: %s", STRERRNO);
       continue;
     }
 
@@ -2203,7 +2249,7 @@ static void *dispatch_thread(void __attribute__((unused)) * arg) /* {{{ */
     }
 
     parse_packet(se, ent->data, ent->data_len, /* flags = */ 0,
-                 /* username = */ NULL);
+                 /* username = */ NULL, &ent->sender);
     sfree(ent->data);
     sfree(ent);
   } /* while (42) */
@@ -2231,11 +2277,9 @@ static int network_receive(void) /* {{{ */
   while (listen_loop == 0) {
     status = poll(listen_sockets_pollfd, listen_sockets_num, -1);
     if (status <= 0) {
-      char errbuf[1024];
       if (errno == EINTR)
         continue;
-      ERROR("network plugin: poll(2) failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("network plugin: poll(2) failed: %s", STRERRNO);
       break;
     }
 
@@ -2246,13 +2290,15 @@ static int network_receive(void) /* {{{ */
         continue;
       status--;
 
-      buffer_len = recv(listen_sockets_pollfd[i].fd, buffer, sizeof(buffer),
-                        0 /* no flags */);
+      struct sockaddr_storage address;
+      socklen_t length = sizeof(address);
+      memset(&address, 0, length);
+      buffer_len =
+          recvfrom(listen_sockets_pollfd[i].fd, buffer, sizeof(buffer),
+                   0 /* no flags */, (struct sockaddr *)&address, &length);
       if (buffer_len < 0) {
-        char errbuf[1024];
         status = (errno != 0) ? errno : -1;
-        ERROR("network plugin: recv(2) failed: %s",
-              sstrerror(errno, errbuf, sizeof(errbuf)));
+        ERROR("network plugin: recv(2) failed: %s", STRERRNO);
         break;
       }
 
@@ -2282,6 +2328,7 @@ static int network_receive(void) /* {{{ */
 
       memcpy(ent->data, buffer, buffer_len);
       ent->data_len = buffer_len;
+      memcpy(&ent->sender, &address, sizeof(ent->sender));
 
       if (private_list_head == NULL)
         private_list_head = ent;
@@ -2362,13 +2409,11 @@ static void network_send_buffer_plain(sockent_t *se, /* {{{ */
                     /* flags = */ 0, (struct sockaddr *)se->data.client.addr,
                     se->data.client.addrlen);
     if (status < 0) {
-      char errbuf[1024];
-
       if ((errno == EINTR) || (errno == EAGAIN))
         continue;
 
       ERROR("network plugin: sendto failed: %s. Closing sending socket.",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+            STRERRNO);
       sockent_client_disconnect(se);
       return;
     }
@@ -2480,7 +2525,7 @@ static void network_send_buffer_encrypted(sockent_t *se, /* {{{ */
 
   assert(buffer_size <= sizeof(buffer));
   DEBUG("network plugin: network_send_buffer_encrypted: "
-        "buffer_size = %zu;",
+        "buffer_size = %" PRIsz ";",
         buffer_size);
 
   pea.head.length = htons(
@@ -2531,9 +2576,11 @@ static void network_send_buffer_encrypted(sockent_t *se, /* {{{ */
 
 static void network_send_buffer(char *buffer, size_t buffer_len) /* {{{ */
 {
-  DEBUG("network plugin: network_send_buffer: buffer_len = %zu", buffer_len);
+  DEBUG("network plugin: network_send_buffer: buffer_len = %" PRIsz,
+        buffer_len);
 
   for (sockent_t *se = sending_sockets; se != NULL; se = se->next) {
+    pthread_mutex_lock(&se->lock);
 #if HAVE_GCRYPT_H
     if (se->data.client.security_level == SECURITY_LEVEL_ENCRYPT)
       network_send_buffer_encrypted(se, buffer, buffer_len);
@@ -2542,6 +2589,7 @@ static void network_send_buffer(char *buffer, size_t buffer_len) /* {{{ */
     else /* if (se->data.client.security_level == SECURITY_LEVEL_NONE) */
 #endif   /* HAVE_GCRYPT_H */
       network_send_buffer_plain(se, buffer, buffer_len);
+    pthread_mutex_unlock(&se->lock);
   } /* for (sending_sockets) */
 } /* }}} void network_send_buffer */
 
@@ -2633,7 +2681,7 @@ static int network_write(const data_set_t *ds, const value_list_t *vl,
 #if COLLECT_DEBUG
     char name[6 * DATA_MAX_NAME_LEN];
     FORMAT_VL(name, sizeof(name), vl);
-    name[sizeof(name) - 1] = 0;
+    name[sizeof(name) - 1] = '\0';
     DEBUG("network plugin: network_write: "
           "NOT sending %s.",
           name);
@@ -2650,10 +2698,10 @@ static int network_write(const data_set_t *ds, const value_list_t *vl,
 
   pthread_mutex_lock(&send_buffer_lock);
 
-  status =
-      add_to_buffer(send_buffer_ptr, network_config_packet_size -
-                                         (send_buffer_fill + BUFF_SIG_SIZE),
-                    &send_buffer_vl, ds, vl);
+  status = add_to_buffer(send_buffer_ptr,
+                         network_config_packet_size -
+                             (send_buffer_fill + BUFF_SIG_SIZE),
+                         &send_buffer_vl, ds, vl);
   if (status >= 0) {
     /* status == bytes added to the buffer */
     send_buffer_fill += status;
@@ -2664,10 +2712,10 @@ static int network_write(const data_set_t *ds, const value_list_t *vl,
   } else {
     flush_buffer();
 
-    status =
-        add_to_buffer(send_buffer_ptr, network_config_packet_size -
-                                           (send_buffer_fill + BUFF_SIG_SIZE),
-                      &send_buffer_vl, ds, vl);
+    status = add_to_buffer(send_buffer_ptr,
+                           network_config_packet_size -
+                               (send_buffer_fill + BUFF_SIG_SIZE),
+                           &send_buffer_vl, ds, vl);
 
     if (status >= 0) {
       send_buffer_fill += status;
@@ -2715,6 +2763,58 @@ static int network_config_set_interface(const oconfig_item_t *ci, /* {{{ */
   *interface = if_nametoindex(if_name);
   return 0;
 } /* }}} int network_config_set_interface */
+
+static int
+network_config_set_bind_address(const oconfig_item_t *ci,
+                                struct sockaddr_storage **bind_address) {
+  if ((*bind_address) != NULL) {
+    ERROR("network_plugin: only a single bind address is allowed");
+    return -1;
+  }
+
+  char addr_text[256];
+
+  if (cf_util_get_string_buffer(ci, addr_text, sizeof(addr_text)) != 0)
+    return -1;
+
+  int ret;
+  struct addrinfo *res = NULL;
+  struct addrinfo ai_hints = {.ai_family = AF_UNSPEC,
+                              .ai_flags = AI_NUMERICHOST,
+                              .ai_protocol = IPPROTO_UDP,
+                              .ai_socktype = SOCK_DGRAM};
+
+  ret = getaddrinfo(addr_text, NULL, &ai_hints, &res);
+  if (ret) {
+    ERROR("network plugin: Bind address option has invalid address set: %s",
+          gai_strerror(ret));
+    return -1;
+  }
+
+  *bind_address = malloc(sizeof(**bind_address));
+  if (*bind_address == NULL) {
+    ERROR("network plugin: network_config_set_bind_address: malloc failed.");
+    freeaddrinfo(res);
+    return -1;
+  }
+  (*bind_address)->ss_family = res->ai_family;
+  if (res->ai_family == AF_INET) {
+    struct sockaddr_in *addr = (struct sockaddr_in *)(*bind_address);
+    inet_pton(AF_INET, addr_text, &(addr->sin_addr));
+  } else if (res->ai_family == AF_INET6) {
+    struct sockaddr_in6 *addr = (struct sockaddr_in6 *)(*bind_address);
+    inet_pton(AF_INET6, addr_text, &(addr->sin6_addr));
+  } else {
+    ERROR("network plugin: %s is an unknown address format %d\n", addr_text,
+          res->ai_family);
+    sfree(*bind_address);
+    freeaddrinfo(res);
+    return -1;
+  }
+
+  freeaddrinfo(res);
+  return 0;
+} /* int network_config_set_bind_address */
 
 static int network_config_set_buffer_size(const oconfig_item_t *ci) /* {{{ */
 {
@@ -2875,6 +2975,8 @@ static int network_config_add_server(const oconfig_item_t *ci) /* {{{ */
 #endif /* HAVE_GCRYPT_H */
         if (strcasecmp("Interface", child->key) == 0)
       network_config_set_interface(child, &se->interface);
+    else if (strcasecmp("BindAddress", child->key) == 0)
+      network_config_set_bind_address(child, &se->data.client.bind_addr);
     else if (strcasecmp("ResolveInterval", child->key) == 0)
       cf_util_get_cdtime(child, &se->data.client.resolve_interval);
     else {
@@ -3128,13 +3230,13 @@ static int network_stats_read(void) /* {{{ */
 } /* }}} int network_stats_read */
 
 static int network_init(void) {
-  static _Bool have_init = 0;
+  static bool have_init;
 
   /* Check if we were already initialized. If so, just return - there's
    * nothing more to do (for now, that is). */
   if (have_init)
     return 0;
-  have_init = 1;
+  have_init = true;
 
   if (network_config_stats)
     plugin_register_read("network", network_stats_read);
@@ -3163,13 +3265,10 @@ static int network_init(void) {
 
   if (dispatch_thread_running == 0) {
     int status;
-    status = plugin_thread_create(&dispatch_thread_id, NULL /* no attributes */,
-                                  dispatch_thread, NULL /* no argument */,
-                                  "network disp");
+    status = plugin_thread_create(&dispatch_thread_id, dispatch_thread,
+                                  NULL /* no argument */, "network disp");
     if (status != 0) {
-      char errbuf[1024];
-      ERROR("network: pthread_create failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("network: pthread_create failed: %s", STRERRNO);
     } else {
       dispatch_thread_running = 1;
     }
@@ -3177,13 +3276,10 @@ static int network_init(void) {
 
   if (receive_thread_running == 0) {
     int status;
-    status = plugin_thread_create(&receive_thread_id, NULL /* no attributes */,
-                                  receive_thread, NULL /* no argument */,
-                                  "network recv");
+    status = plugin_thread_create(&receive_thread_id, receive_thread,
+                                  NULL /* no argument */, "network recv");
     if (status != 0) {
-      char errbuf[1024];
-      ERROR("network: pthread_create failed: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("network: pthread_create failed: %s", STRERRNO);
     } else {
       receive_thread_running = 1;
     }

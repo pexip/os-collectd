@@ -26,8 +26,8 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 
 #include <netdb.h>
 #include <netinet/in.h>
@@ -37,8 +37,8 @@
 #define ZOOKEEPER_DEF_HOST "127.0.0.1"
 #define ZOOKEEPER_DEF_PORT "2181"
 
-static char *zk_host = NULL;
-static char *zk_port = NULL;
+static char *zk_host;
+static char *zk_port;
 
 static const char *config_keys[] = {"Host", "Port"};
 static int config_keys_num = STATIC_ARRAY_SIZE(config_keys);
@@ -99,28 +99,22 @@ static int zookeeper_connect(void) {
 
   status = getaddrinfo(host, port, &ai_hints, &ai_list);
   if (status != 0) {
-    char errbuf[1024];
     INFO("getaddrinfo failed: %s",
-         (status == EAI_SYSTEM) ? sstrerror(errno, errbuf, sizeof(errbuf))
-                                : gai_strerror(status));
+         (status == EAI_SYSTEM) ? STRERRNO : gai_strerror(status));
     return -1;
   }
 
   for (struct addrinfo *ai = ai_list; ai != NULL; ai = ai->ai_next) {
     sk = socket(ai->ai_family, SOCK_STREAM, 0);
     if (sk < 0) {
-      char errbuf[1024];
-      WARNING("zookeeper: socket(2) failed: %s",
-              sstrerror(errno, errbuf, sizeof(errbuf)));
+      WARNING("zookeeper: socket(2) failed: %s", STRERRNO);
       continue;
     }
     status = (int)connect(sk, ai->ai_addr, ai->ai_addrlen);
     if (status != 0) {
-      char errbuf[1024];
       close(sk);
       sk = -1;
-      WARNING("zookeeper: connect(2) failed: %s",
-              sstrerror(errno, errbuf, sizeof(errbuf)));
+      WARNING("zookeeper: connect(2) failed: %s", STRERRNO);
       continue;
     }
 
@@ -144,9 +138,7 @@ static int zookeeper_query(char *buffer, size_t buffer_size) {
 
   status = (int)swrite(sk, "mntr\r\n", strlen("mntr\r\n"));
   if (status != 0) {
-    char errbuf[1024];
-    ERROR("zookeeper: write(2) failed: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("zookeeper: write(2) failed: %s", STRERRNO);
     close(sk);
     return -1;
   }
@@ -158,11 +150,9 @@ static int zookeeper_query(char *buffer, size_t buffer_size) {
                              buffer_size - buffer_fill, /* flags = */ 0)) !=
          0) {
     if (status < 0) {
-      char errbuf[1024];
       if ((errno == EAGAIN) || (errno == EINTR))
         continue;
-      ERROR("zookeeper: Error reading from socket: %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("zookeeper: Error reading from socket: %s", STRERRNO);
       close(sk);
       return -1;
     }
@@ -186,9 +176,11 @@ static int zookeeper_read(void) {
   char *save_ptr;
   char *line;
   char *fields[2];
+  long followers = 0;
 
   if (zookeeper_query(buf, sizeof(buf)) < 0) {
-    return -1;
+    zookeeper_submit_gauge("count", "quorum", -1);
+    return 0;
   }
 
   ptr = buf;
@@ -221,22 +213,32 @@ static int zookeeper_read(void) {
       zookeeper_submit_gauge("gauge", "watch", atol(fields[1]));
     } else if (FIELD_CHECK(fields[0], "zk_ephemerals_count")) {
       zookeeper_submit_gauge("gauge", "ephemerals", atol(fields[1]));
-    } else if (FIELD_CHECK(fields[0], "zk_ephemerals_count")) {
-      zookeeper_submit_gauge("gauge", "ephemerals", atol(fields[1]));
-    } else if (FIELD_CHECK(fields[0], "zk_ephemerals_count")) {
-      zookeeper_submit_gauge("gauge", "ephemerals", atol(fields[1]));
+    } else if (FIELD_CHECK(fields[0], "zk_open_file_descriptor_count")) {
+      zookeeper_submit_gauge("file_handles", "open", atol(fields[1]));
+    } else if (FIELD_CHECK(fields[0], "zk_max_file_descriptor_count")) {
+      zookeeper_submit_gauge("file_handles", "max", atol(fields[1]));
     } else if (FIELD_CHECK(fields[0], "zk_approximate_data_size")) {
       zookeeper_submit_gauge("bytes", "approximate_data_size", atol(fields[1]));
     } else if (FIELD_CHECK(fields[0], "zk_followers")) {
-      zookeeper_submit_gauge("count", "followers", atol(fields[1]));
+      followers = atol(fields[1]);
+      zookeeper_submit_gauge("count", "followers", followers);
     } else if (FIELD_CHECK(fields[0], "zk_synced_followers")) {
       zookeeper_submit_gauge("count", "synced_followers", atol(fields[1]));
     } else if (FIELD_CHECK(fields[0], "zk_pending_syncs")) {
       zookeeper_submit_gauge("count", "pending_syncs", atol(fields[1]));
+    } else if (FIELD_CHECK(fields[0], "zk_last_proposal_size")) {
+      zookeeper_submit_gauge("bytes", "last_proposal", atol(fields[1]));
+    } else if (FIELD_CHECK(fields[0], "zk_min_proposal_size")) {
+      zookeeper_submit_gauge("bytes", "min_proposal", atol(fields[1]));
+    } else if (FIELD_CHECK(fields[0], "zk_max_proposal_size")) {
+      zookeeper_submit_gauge("bytes", "max_proposal", atol(fields[1]));
     } else {
       DEBUG("Uncollected zookeeper MNTR field %s", fields[0]);
     }
   }
+  /* Reports 0 for followers, # when zk_followers present. Intended to be used
+   * for quorum detection by taking max for each time period. */
+  zookeeper_submit_gauge("count", "quorum", followers);
 
   return 0;
 } /* zookeeper_read */
