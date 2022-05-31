@@ -25,8 +25,8 @@
 
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 
 #if HAVE_MACH_MACH_TYPES_H
 #include <mach/mach_types.h>
@@ -72,9 +72,9 @@
 int battery_read_statefs(
     void); /* defined in battery_statefs; used by StateFS backend */
 
-static _Bool report_percent = 0;
-static _Bool report_degraded = 0;
-static _Bool query_statefs = 0;
+static bool report_percent;
+static bool report_degraded;
+static bool query_statefs;
 
 static void battery_submit2(char const *plugin_instance, /* {{{ */
                             char const *type, char const *type_instance,
@@ -336,7 +336,7 @@ static int battery_read(void) /* {{{ */
 
   return 0;
 } /* }}} int battery_read */
-/* #endif HAVE_IOKIT_IOKITLIB_H || HAVE_IOKIT_PS_IOPOWERSOURCES_H */
+  /* #endif HAVE_IOKIT_IOKITLIB_H || HAVE_IOKIT_PS_IOPOWERSOURCES_H */
 
 #elif KERNEL_LINUX
 /* Reads a file which contains only a number (and optionally a trailing
@@ -349,11 +349,9 @@ static int sysfs_file_to_buffer(char const *dir, /* {{{ */
 
   snprintf(filename, sizeof(filename), "%s/%s/%s", dir, power_supply, basename);
 
-  status = (int)read_file_contents(filename, buffer, buffer_size - 1);
+  status = (int)read_text_file_contents(filename, buffer, buffer_size);
   if (status < 0)
     return status;
-
-  buffer[status] = '\0';
 
   strstripnewline(buffer);
   return 0;
@@ -403,6 +401,44 @@ static int read_sysfs_capacity(char const *dir, /* {{{ */
   return 0;
 } /* }}} int read_sysfs_capacity */
 
+static int read_sysfs_capacity_from_charge(char const *dir, /* {{{ */
+                                           char const *power_supply,
+                                           char const *plugin_instance) {
+  gauge_t capacity_charged = NAN;
+  gauge_t capacity_full = NAN;
+  gauge_t capacity_design = NAN;
+  gauge_t voltage_min_design = NAN;
+  int status;
+
+  status = sysfs_file_to_gauge(dir, power_supply, "voltage_min_design",
+                               &voltage_min_design);
+  if (status != 0)
+    return status;
+  voltage_min_design *= SYSFS_FACTOR;
+
+  status =
+      sysfs_file_to_gauge(dir, power_supply, "charge_now", &capacity_charged);
+  if (status != 0)
+    return status;
+  capacity_charged *= voltage_min_design;
+
+  status =
+      sysfs_file_to_gauge(dir, power_supply, "charge_full", &capacity_full);
+  if (status != 0)
+    return status;
+  capacity_full *= voltage_min_design;
+
+  status = sysfs_file_to_gauge(dir, power_supply, "charge_full_design",
+                               &capacity_design);
+  if (status != 0)
+    return status;
+  capacity_design *= voltage_min_design;
+
+  submit_capacity(plugin_instance, capacity_charged * SYSFS_FACTOR,
+                  capacity_full * SYSFS_FACTOR, capacity_design * SYSFS_FACTOR);
+  return 0;
+} /* }}} int read_sysfs_capacity_from_charge */
+
 static int read_sysfs_callback(char const *dir, /* {{{ */
                                char const *power_supply, void *user_data) {
   int *battery_index = user_data;
@@ -410,7 +446,7 @@ static int read_sysfs_callback(char const *dir, /* {{{ */
   char const *plugin_instance;
   char buffer[32];
   gauge_t v = NAN;
-  _Bool discharging = 0;
+  bool discharging = false;
   int status;
 
   /* Ignore non-battery directories, such as AC power. */
@@ -424,7 +460,7 @@ static int read_sysfs_callback(char const *dir, /* {{{ */
   (void)sysfs_file_to_buffer(dir, power_supply, "status", buffer,
                              sizeof(buffer));
   if (strcasecmp("Discharging", buffer) == 0)
-    discharging = 1;
+    discharging = true;
 
   /* FIXME: This is a dirty hack for backwards compatibility: The battery
    * plugin, for a very long time, has had the plugin_instance
@@ -434,7 +470,10 @@ static int read_sysfs_callback(char const *dir, /* {{{ */
   plugin_instance = (*battery_index == 0) ? "0" : power_supply;
   (*battery_index)++;
 
-  read_sysfs_capacity(dir, power_supply, plugin_instance);
+  if (sysfs_file_to_gauge(dir, power_supply, "energy_now", &v) == 0)
+    read_sysfs_capacity(dir, power_supply, plugin_instance);
+  else
+    read_sysfs_capacity_from_charge(dir, power_supply, plugin_instance);
 
   if (sysfs_file_to_gauge(dir, power_supply, "power_now", &v) == 0) {
     if (discharging)
@@ -522,8 +561,8 @@ static int read_acpi_callback(char const *dir, /* {{{ */
   gauge_t capacity_charged = NAN;
   gauge_t capacity_full = NAN;
   gauge_t capacity_design = NAN;
-  _Bool charging = 0;
-  _Bool is_current = 0;
+  bool charging = false;
+  bool is_current = false;
 
   char const *plugin_instance;
   char filename[PATH_MAX];
@@ -560,9 +599,9 @@ static int read_acpi_callback(char const *dir, /* {{{ */
     if ((strcmp(fields[0], "charging") == 0) &&
         (strcmp(fields[1], "state:") == 0)) {
       if (strcmp(fields[2], "charging") == 0)
-        charging = 1;
+        charging = true;
       else
-        charging = 0;
+        charging = false;
       continue;
     }
 
@@ -575,7 +614,7 @@ static int read_acpi_callback(char const *dir, /* {{{ */
       strtogauge(fields[2], &power);
 
       if ((numfields >= 4) && (strcmp("mA", fields[3]) == 0))
-        is_current = 1;
+        is_current = true;
     } else if ((strcmp(fields[0], "remaining") == 0) &&
                (strcmp(fields[1], "capacity:") == 0))
       strtogauge(fields[2], &capacity_charged);

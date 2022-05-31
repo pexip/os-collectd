@@ -16,8 +16,13 @@ CPPFLAGS = $(shell dpkg-buildflags --get CPPFLAGS)
 CPPFLAGS += -I$(CURDIR)/debian/include
 CFLAGS = $(shell dpkg-buildflags --get CFLAGS)
 CFLAGS += -Wall -Wno-error=deprecated-declarations
-# 897724
-CFLAGS += -Wno-error=format-truncation
+CXXFLAGS = $(shell dpkg-buildflags --get CXXFLAGS)
+CXXFLAGS += -Wall -Wno-error=deprecated-declarations
+
+TEST_GCC_VER_9 := $(shell expr `$(CC) -dumpversion | cut -f1 -d.` \>= 9)
+ifeq ($(TEST_GCC_VER_9),1)
+  CFLAGS += -Wno-error=address-of-packed-member -Wno-stringop-truncation -Wno-cpp -Wno-error=format-truncation
+endif
 
 # Upstream defaults to ${sysconfdir}/collectd.conf. Setting ${sysconfdir} to
 # /etc/collectd would be wrong though.
@@ -31,6 +36,11 @@ ifeq ($(DEB_HOST_ARCH_OS),kfreebsd)
 endif
 
 LDFLAGS = $(shell dpkg-buildflags --get LDFLAGS)
+
+# grpc workaround
+ifneq (,$(filter $(DEB_HOST_ARCH), armel mips mipsel powerpc))
+  LDFLAGS += -Wl,--no-as-needed -latomic -Wl,--as-needed
+endif
 
 # The archdir map has been copied from openjdk-6's debian/rules.
 JAVA_ARCHDIR = $(shell /usr/share/javahelper/java-arch.sh $(DEB_BUILD_ARCH))
@@ -55,6 +65,9 @@ confflags = --host=$(DEB_HOST_GNU_TYPE) \
 			--disable-silent-rules \
 			--enable-all-plugins
 
+# disable tokyotyrant (#980331)
+confflags += --disable-tokyotyrant
+
 # These plugins do not provide any functionality under Linux.
 # MacOS only (requires IO Kit):
 confflags += --disable-apple_sensors
@@ -62,6 +75,12 @@ confflags += --disable-apple_sensors
 confflags += --disable-lpar
 # Solaris only (requires devinfo and kstat)
 confflags += --disable-tape
+
+# redfish.h is missing
+confflags += --disable-redfish
+
+# pmw_api.h is missing
+confflags += --disable-dcpmm
 
 # libaquaero5 is required for the aquaero plugin
 confflags += --disable-aquaero
@@ -84,13 +103,23 @@ confflags += --disable-routeros
 # xmms1 is required for the xmms plugin.
 confflags += --disable-xmms
 
+# libslurm doesn't have a pkg-config file in Debian
+confflags += --disable-slurm
+
 # libsigrok4 incompatible with the plugin.
 # Cf. https://github.com/collectd/collectd/issues/1574
 confflags += --disable-sigrok
 
-# disable lvm plugin, liblvm2app is deprecated upstream, #915692
-# Cf. https://github.com/collectd/collectd/issues/2647
-confflags += --disable-lvm
+# libnvidia-ml is non-free
+confflags += --disable-gpu_nvidia
+
+# disable nut plugin for now.
+# nut is not in testing, see #937169 #885358
+confflags += --disable-nut
+
+# ganglia FTBS, disable it for now
+# see #964399
+confflags += --disable-gmond
 
 # These plugins are Linux-specific.
 ifeq ($(DEB_HOST_ARCH_OS),kfreebsd)
@@ -113,10 +142,19 @@ ifeq ($(DEB_HOST_ARCH_OS),kfreebsd)
 		--disable-vserver
 endif
 
-# This plugin is FreeBSD-specific.
+# These plugins art FreeBSD-specific.
 ifneq ($(DEB_HOST_ARCH_OS),kfreebsd)
 	confflags += \
-		--disable-pf
+		--disable-pf \
+		--disable-ipstats \
+		--disable-netstat_udp
+endif
+
+
+# intel only stuff
+ifeq (,$(filter $(DEB_HOST_ARCH),amd64 i386))
+    confflags += --disable-capabilities
+    confflags += --disable-dpdk_telemetry
 endif
 
 # This plugin is Solaris-specific.
@@ -151,7 +189,6 @@ ifeq ($(DEB_HOST_ARCH_OS),kfreebsd)
 	confflags += \
 		--disable-gmond \
 		--disable-virt \
-		--disable-tokyotyrant \
 		--disable-java
 endif
 
@@ -165,6 +202,12 @@ ifeq (,$(filter amd64 i386, $(DEB_HOST_ARCH)))
 		--disable-mcelog \
 		--disable-mic \
 		--disable-turbostat
+endif
+
+# the pcie_errors plugin does not work on all kinds of hardware
+ifeq (,$(filter amd64 arm64 armel armhf i386 mips64el mipsel ppc64el, $(DEB_HOST_ARCH)))
+	confflags += \
+		--disable-pcie_errors
 endif
 
 # This plugin is x86 and arm specific.
@@ -186,7 +229,7 @@ ifneq (,$(filter hppa sparc, $(DEB_HOST_ARCH)))
 endif
 
 # gRPC is only available on x86, arm, ppc.
-ifeq (,$(filter amd64 arm64 armel armhf i386 ppc64el powerpc, $(DEB_HOST_ARCH)))
+ifeq (,$(filter amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x, $(DEB_HOST_ARCH)))
 	confflags += --disable-grpc
 endif
 
@@ -294,9 +337,10 @@ build-stamp:
 	
 	dh_autoreconf
 	
-	./configure $(confflags) CPPFLAGS="$(CPPFLAGS)" CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)" \
-		JAVAC="$(JAVAC)" JAR="$(JAR)" JAVA_CPPFLAGS="$(JAVA_CPPFLAGS)" \
-		JAVA_LDFLAGS="$(JAVA_LDFLAGS)" \
+	CXXFLAGS="$(CXXFLAGS)" CPPFLAGS="$(CPPFLAGS)" CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)" \
+	JAVAC="$(JAVAC)" JAR="$(JAR)" JAVA_CPPFLAGS="$(JAVA_CPPFLAGS)" \
+	JAVA_LDFLAGS="$(JAVA_LDFLAGS)" \
+	./configure $(confflags) \
 		|| ( status=$$?; cat config.log; exit $$status )
 
 	$(MAKE)
@@ -326,17 +370,24 @@ install-indep:
 	dh_testroot
 	dh_prep
 	dh_installdirs -i
-	dh_install -i
 	
+	set -e ;\
+		find src  -path src/libcollectdclient -prune -o -path src/liboconfig -prune -o -name '*.h'  -print | while read i; do \
+			d=$$(echo "$${i}" | sed 's,^src,debian/tmp/usr/include/collectd/core,') ;\
+			mkdir -p $$(echo "$${i}" | sed -e 's,^src,debian/tmp/usr/include/collectd/core,' -e 's,/[^/]*$$,,') ;\
+			cp "$${i}" "$${d}" ;\
+		done
+
+	dh_install -i
+
 	# update include path for collectd header files
 	(	set -e; \
 		cd $(CURDIR)/debian/collectd-dev/usr/include/collectd/; \
-		for lib in $$(find . -type f -name '*.h'); do \
+		headers=$$(find . -type f -name '*.h'); \
+		for lib in $$headers; do \
 			libname=$$(basename $$lib); \
 			fullpath=$$(echo $$lib | sed -r -e 's,^\./,collectd/,'); \
-			for dir in $$(find . -mindepth 1 -type d); do \
-				sed -r -i -e "s,(include\s+)\".*\<$$libname\",\1\"$$fullpath\"," $$dir/*.h; \
-			done; \
+			sed -r -i -e "s,(include\s+)\".*\<$$libname\",\1\"$$fullpath\"," $$headers; \
 		done )
 
 install-arch: build
@@ -350,9 +401,9 @@ install-arch: build
 	rm -f debian/tmp/usr/lib/collectd/*.la
 	rm -f debian/tmp/usr/lib/libcollectdclient.la
 	rm -f debian/tmp/etc/collectd.conf
-	
+
 	dh_install -a --sourcedir=$(CURDIR)/debian/tmp --fail-missing
-	
+
 	perl ./debian/bin/gen_plugin_deps.pl
 	
 	mkdir -p debian/collectd-core/usr/share/lintian/overrides/
@@ -378,7 +429,7 @@ binary-arch: build install-arch
 	dh_testroot
 	dh_installchangelogs -a ChangeLog
 	dh_installdocs -A -a debian/README.Debian AUTHORS README
-	dh_installdocs -a debian/NEWS.Debian debian/README.Debian.plugins
+	dh_installdocs -a debian/NEWS debian/README.Debian.plugins
 	dh_installexamples -a contrib/collectd2html.pl contrib/collection.cgi \
 		contrib/collection3/ contrib/php-collection/ \
 		contrib/exec-munin.conf contrib/exec-munin.px contrib/exec-smartctl \
@@ -401,7 +452,7 @@ binary-arch: build install-arch
 	dh_installinit -pcollectd-core --name=collectd -- defaults 95
 	dh_systemd_start -pcollectd-core
 	dh_link -a
-	dh_strip -a --dbg-package=collectd-dbg
+	dh_strip -a --dbgsym-migration='collectd-dbg (<< 5.9.2.g-2~)'
 	dh_strip_nondeterminism -pcollectd-core
 	dh_compress -a -Xexamples/
 	dh_fixperms -a
@@ -422,4 +473,3 @@ binary-arch: build install-arch
 
 binary: binary-arch binary-indep
 .PHONY: build build-arch build-indep clean binary-indep binary-arch binary install-indep install-arch
-

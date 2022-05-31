@@ -26,15 +26,19 @@
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE /* For setgroups */
 
+/* _GNU_SOURCE is needed in Linux to use execvpe */
+#define _GNU_SOURCE
+
 #include "collectd.h"
 
-#include "common.h"
 #include "plugin.h"
+#include "utils/common/common.h"
 
-#include "utils_cmd_putnotif.h"
-#include "utils_cmd_putval.h"
+#include "utils/cmds/putnotif.h"
+#include "utils/cmds/putval.h"
 
 #include <grp.h>
+#include <poll.h>
 #include <pwd.h>
 #include <signal.h>
 #include <sys/types.h>
@@ -42,6 +46,8 @@
 #ifdef HAVE_SYS_CAPABILITY_H
 #include <sys/capability.h>
 #endif
+
+extern char **environ;
 
 #define PL_NORMAL 0x01
 #define PL_NOTIF_ACTION 0x02
@@ -85,7 +91,7 @@ const long int MAX_GRBUF_SIZE = 65536;
 /*
  * Private variables
  */
-static program_list_t *pl_head = NULL;
+static program_list_t *pl_head;
 static pthread_mutex_t pl_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /*
@@ -245,52 +251,11 @@ static int exec_config(oconfig_item_t *ci) /* {{{ */
   return 0;
 } /* int exec_config }}} */
 
-#if !defined(HAVE_SETENV)
-static char env_interval[64];
-// max hostname len is 255, so this should be enough
-static char env_hostname[300];
-#endif
-
-static void set_environment(void) /* {{{ */
-{
-#ifdef HAVE_SETENV
-  char buffer[1024];
-
-  snprintf(buffer, sizeof(buffer), "%.3f",
-           CDTIME_T_TO_DOUBLE(plugin_get_interval()));
-  setenv("COLLECTD_INTERVAL", buffer, /* overwrite = */ 1);
-
-  sstrncpy(buffer, hostname_g, sizeof(buffer));
-  setenv("COLLECTD_HOSTNAME", buffer, /* overwrite = */ 1);
-#else
-  snprintf(env_interval, sizeof(env_interval), "COLLECTD_INTERVAL=%.3f",
-           CDTIME_T_TO_DOUBLE(plugin_get_interval()));
-  putenv(env_interval);
-
-  snprintf(env_hostname, sizeof(env_hostname), "COLLECTD_HOSTNAME=%s",
-           hostname_g);
-  putenv(env_hostname);
-#endif
-} /* }}} void set_environment */
-
-static void unset_environment(void) /* {{{ */
-{
-#ifdef HAVE_SETENV
-  unsetenv("COLLECTD_INTERVAL");
-  unsetenv("COLLECTD_HOSTNAME");
-#else
-  snprintf(env_interval, sizeof(env_interval), "COLLECTD_INTERVAL");
-  putenv(env_interval);
-  snprintf(env_hostname, sizeof(env_hostname), "COLLECTD_HOSTNAME");
-  putenv(env_hostname);
-#endif
-} /* }}} void unset_environment */
-
-__attribute__((noreturn)) static void exec_child(program_list_t *pl, int uid,
-                                                 int gid, int egid) /* {{{ */
+__attribute__((noreturn)) static void exec_child(program_list_t *pl,
+                                                 char **envp, int uid, int gid,
+                                                 int egid) /* {{{ */
 {
   int status;
-  char errbuf[1024];
 
 #if HAVE_SETGROUPS
   if (getuid() == 0) {
@@ -311,31 +276,32 @@ __attribute__((noreturn)) static void exec_child(program_list_t *pl, int uid,
 
   status = setgid(gid);
   if (status != 0) {
-    ERROR("exec plugin: setgid (%i) failed: %s", gid,
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: setgid (%i) failed: %s", gid, STRERRNO);
     exit(-1);
   }
 
   if (egid != -1) {
     status = setegid(egid);
     if (status != 0) {
-      ERROR("exec plugin: setegid (%i) failed: %s", egid,
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("exec plugin: setegid (%i) failed: %s", egid, STRERRNO);
       exit(-1);
     }
   }
 
   status = setuid(uid);
   if (status != 0) {
-    ERROR("exec plugin: setuid (%i) failed: %s", uid,
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: setuid (%i) failed: %s", uid, STRERRNO);
     exit(-1);
   }
 
+#ifdef HAVE_EXECVPE
+  execvpe(pl->exec, pl->argv, envp);
+#else
+  environ = envp;
   execvp(pl->exec, pl->argv);
+#endif
 
-  ERROR("exec plugin: Failed to execute ``%s'': %s", pl->exec,
-        sstrerror(errno, errbuf, sizeof(errbuf)));
+  ERROR("exec plugin: Failed to execute ``%s'': %s", pl->exec, STRERRNO);
   exit(-1);
 } /* void exec_child }}} */
 
@@ -349,13 +315,11 @@ static void reset_signal_mask(void) /* {{{ */
 
 static int create_pipe(int fd_pipe[2]) /* {{{ */
 {
-  char errbuf[1024];
   int status;
 
   status = pipe(fd_pipe);
   if (status != 0) {
-    ERROR("exec plugin: pipe failed: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: pipe failed: %s", STRERRNO);
     return -1;
   }
 
@@ -420,9 +384,7 @@ static int getegr_id(program_list_t *pl, int gid) /* {{{ */
     } else if (errno == ERANGE) {
       grbuf_size += grbuf_size; // increment buffer size and try again
     } else {
-      char errbuf[1024];
-      ERROR("exec plugin: getegr_id failed %s",
-            sstrerror(errno, errbuf, sizeof(errbuf)));
+      ERROR("exec plugin: getegr_id failed %s", STRERRNO);
       sfree(grbuf);
       return -2;
     }
@@ -430,7 +392,7 @@ static int getegr_id(program_list_t *pl, int gid) /* {{{ */
   ERROR("exec plugin: getegr_id Max grbuf size reached  for %s", pl->group);
   sfree(grbuf);
   return -2;
-} /* }}} */
+}
 
 /*
  * Creates three pipes (one for reading, one for writing and one for errors),
@@ -444,7 +406,6 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
   int fd_pipe_in[2] = {-1, -1};
   int fd_pipe_out[2] = {-1, -1};
   int fd_pipe_err[2] = {-1, -1};
-  char errbuf[1024];
   int status;
   int pid;
 
@@ -473,7 +434,7 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
   status = getpwnam_r(pl->user, &sp, nambuf, sizeof(nambuf), &sp_ptr);
   if (status != 0) {
     ERROR("exec plugin: Failed to get user information for user ``%s'': %s",
-          pl->user, sstrerror(status, errbuf, sizeof(errbuf)));
+          pl->user, STRERROR(status));
     goto failed;
   }
 
@@ -489,23 +450,49 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
     goto failed;
   }
 
+  /* The group configured in the configfile is set as effective group, because
+   * this way the forked process can (re-)gain the user's primary group. */
   egid = getegr_id(pl, gid);
   if (egid == -2) {
     goto failed;
   }
 
-  set_environment();
+  double interval = CDTIME_T_TO_DOUBLE(plugin_get_interval());
 
   pid = fork();
   if (pid < 0) {
-    ERROR("exec plugin: fork failed: %s",
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: fork failed: %s", STRERRNO);
     goto failed;
   } else if (pid == 0) {
-    int fd_num;
+    char interval_buf[128];
+    snprintf(interval_buf, sizeof(interval_buf), "COLLECTD_INTERVAL=%.3f",
+             interval);
+
+    /* max hostname len is 255, so this should be enough */
+    char hostname_buf[300];
+    snprintf(hostname_buf, sizeof(hostname_buf), "COLLECTD_HOSTNAME=%s",
+             hostname_g);
+
+    size_t env_size = 0;
+    while (environ[env_size] != NULL) {
+      ++env_size;
+    }
+
+    /* Copy the environment variables */
+    char *envp[env_size + 3];
+    size_t envp_idx;
+    for (envp_idx = 0; environ[envp_idx] != NULL && envp_idx < env_size;
+         ++envp_idx) {
+      envp[envp_idx] = environ[envp_idx];
+    }
+
+    /* Add the collectd environment variables */
+    envp[envp_idx++] = interval_buf;
+    envp[envp_idx++] = hostname_buf;
+    envp[envp_idx++] = NULL;
 
     /* Close all file descriptors but the pipe end we need. */
-    fd_num = getdtablesize();
+    int fd_num = getdtablesize();
     for (int fd = 0; fd < fd_num; fd++) {
       if ((fd == fd_pipe_in[0]) || (fd == fd_pipe_out[1]) ||
           (fd == fd_pipe_err[1]))
@@ -534,11 +521,9 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
     /* Unblock all signals */
     reset_signal_mask();
 
-    exec_child(pl, uid, gid, egid);
+    exec_child(pl, envp, uid, gid, egid);
     /* does not return */
   }
-
-  unset_environment();
 
   close(fd_pipe_in[0]);
   close(fd_pipe_out[1]);
@@ -562,8 +547,6 @@ static int fork_child(program_list_t *pl, int *fd_in, int *fd_out,
   return pid;
 
 failed:
-  unset_environment();
-
   close_pipe(fd_pipe_in);
   close_pipe(fd_pipe_out);
   close_pipe(fd_pipe_err);
@@ -587,8 +570,8 @@ static int parse_line(char *buffer) /* {{{ */
 static void *exec_read_one(void *arg) /* {{{ */
 {
   program_list_t *pl = (program_list_t *)arg;
-  int fd, fd_err, highest_fd;
-  fd_set fdset, copy;
+  int fd, fd_err;
+  struct pollfd fds[2] = {{0}};
   int status;
   char buffer[1200]; /* if not completely read */
   char buffer_err[1024];
@@ -607,27 +590,22 @@ static void *exec_read_one(void *arg) /* {{{ */
 
   assert(pl->pid != 0);
 
-  FD_ZERO(&fdset);
-  FD_SET(fd, &fdset);
-  FD_SET(fd_err, &fdset);
-
-  /* Determine the highest file descriptor */
-  highest_fd = (fd > fd_err) ? fd : fd_err;
-
-  /* We use a copy of fdset, as select modifies it */
-  copy = fdset;
+  fds[0].fd = fd;
+  fds[0].events = POLLIN;
+  fds[1].fd = fd_err;
+  fds[1].events = POLLIN;
 
   while (1) {
     int len;
 
-    status = select(highest_fd + 1, &copy, NULL, NULL, NULL);
+    status = poll(fds, STATIC_ARRAY_SIZE(fds), -1);
     if (status < 0) {
       if (errno == EINTR)
         continue;
       break;
     }
 
-    if (FD_ISSET(fd, &copy)) {
+    if (fds[0].revents & (POLLIN | POLLHUP)) {
       char *pnl;
 
       len = read(fd, pbuffer, sizeof(buffer) - 1 - (pbuffer - buffer));
@@ -660,7 +638,10 @@ static void *exec_read_one(void *arg) /* {{{ */
         pbuffer = buffer + len;
       } else
         pbuffer = buffer;
-    } else if (FD_ISSET(fd_err, &copy)) {
+    } else if (fds[0].revents & (POLLERR | POLLNVAL)) {
+      ERROR("exec plugin: Failed to read pipe from `%s'.", pl->exec);
+      break;
+    } else if (fds[1].revents & (POLLIN | POLLHUP)) {
       char *pnl;
 
       len = read(fd_err, pbuffer_err,
@@ -674,14 +655,11 @@ static void *exec_read_one(void *arg) /* {{{ */
         /* We've reached EOF */
         NOTICE("exec plugin: Program `%s' has closed STDERR.", pl->exec);
 
-        /* Remove file descriptor form select() set. */
-        FD_CLR(fd_err, &fdset);
-        copy = fdset;
-        highest_fd = fd;
-
         /* Clean up file descriptor */
         close(fd_err);
         fd_err = -1;
+        fds[1].fd = -1;
+        fds[1].events = 0;
         continue;
       }
 
@@ -706,9 +684,16 @@ static void *exec_read_one(void *arg) /* {{{ */
         pbuffer_err = buffer_err + len;
       } else
         pbuffer_err = buffer_err;
+    } else if (fds[1].revents & (POLLERR | POLLNVAL)) {
+      WARNING("exec plugin: Ignoring STDERR for program `%s'.", pl->exec);
+      /* Clean up file descriptor */
+      if ((fds[1].revents & POLLNVAL) == 0) {
+        close(fd_err);
+        fd_err = -1;
+      }
+      fds[1].fd = -1;
+      fds[1].events = 0;
     }
-    /* reset copy */
-    copy = fdset;
   }
 
   DEBUG("exec plugin: exec_read_one: Waiting for `%s' to exit.", pl->exec);
@@ -750,9 +735,7 @@ static void *exec_notification_one(void *arg) /* {{{ */
 
   fh = fdopen(fd, "w");
   if (fh == NULL) {
-    char errbuf[1024];
-    ERROR("exec plugin: fdopen (%i) failed: %s", fd,
-          sstrerror(errno, errbuf, sizeof(errbuf)));
+    ERROR("exec plugin: fdopen (%i) failed: %s", fd, STRERRNO);
     kill(pid, SIGTERM);
     close(fd);
     sfree(arg);
@@ -765,8 +748,9 @@ static void *exec_notification_one(void *arg) /* {{{ */
   else if (n->severity == NOTIF_OKAY)
     severity = "OKAY";
 
-  fprintf(fh, "Severity: %s\n"
-              "Time: %.3f\n",
+  fprintf(fh,
+          "Severity: %s\n"
+          "Time: %.3f\n",
           severity, CDTIME_T_TO_DOUBLE(n->time));
 
   /* Print the optional fields */
@@ -844,7 +828,6 @@ static int exec_read(void) /* {{{ */
 {
   for (program_list_t *pl = pl_head; pl != NULL; pl = pl->next) {
     pthread_t t;
-    pthread_attr_t attr;
 
     /* Only execute `normal' style executables here. */
     if ((pl->flags & PL_NORMAL) == 0)
@@ -859,14 +842,13 @@ static int exec_read(void) /* {{{ */
     pl->flags |= PL_RUNNING;
     pthread_mutex_unlock(&pl_lock);
 
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     int status =
-        plugin_thread_create(&t, &attr, exec_read_one, (void *)pl, "exec read");
-    if (status != 0) {
+        plugin_thread_create(&t, exec_read_one, (void *)pl, "exec read");
+    if (status == 0) {
+      pthread_detach(t);
+    } else {
       ERROR("exec plugin: plugin_thread_create failed.");
     }
-    pthread_attr_destroy(&attr);
   } /* for (pl) */
 
   return 0;
@@ -878,7 +860,6 @@ static int exec_notification(const notification_t *n, /* {{{ */
 
   for (program_list_t *pl = pl_head; pl != NULL; pl = pl->next) {
     pthread_t t;
-    pthread_attr_t attr;
 
     /* Only execute `notification' style executables here. */
     if ((pl->flags & PL_NOTIF_ACTION) == 0)
@@ -902,14 +883,13 @@ static int exec_notification(const notification_t *n, /* {{{ */
     pln->n.meta = NULL;
     plugin_notification_meta_copy(&pln->n, n);
 
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    int status = plugin_thread_create(&t, &attr, exec_notification_one,
-                                      (void *)pln, "exec notify");
-    if (status != 0) {
+    int status = plugin_thread_create(&t, exec_notification_one, (void *)pln,
+                                      "exec notify");
+    if (status == 0) {
+      pthread_detach(t);
+    } else {
       ERROR("exec plugin: plugin_thread_create failed.");
     }
-    pthread_attr_destroy(&attr);
   } /* for (pl) */
 
   return 0;
@@ -929,6 +909,11 @@ static int exec_shutdown(void) /* {{{ */
       INFO("exec plugin: Sent SIGTERM to %hu", (unsigned short int)pl->pid);
     }
 
+    for (int i = 0; pl->argv[i] != NULL; i++) {
+      sfree(pl->argv[i]);
+    }
+    sfree(pl->argv);
+    sfree(pl->exec);
     sfree(pl->user);
     sfree(pl);
 
