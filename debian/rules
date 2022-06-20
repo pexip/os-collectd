@@ -236,14 +236,17 @@ endif
 # Disable unwanted plugins on pexos
 confflags += \
 		--disable-amqp \
+		--disable-amqp1 \
 		--disable-apache \
 		--disable-apcups \
 		--disable-ascent \
 		--disable-barometer \
 		--disable-battery \
 		--disable-bind \
+		--disable-capabilities \
 		--disable-ceph \
 		--disable-chrony \
+		--disable-connectivity \
 		--disable-cpusleep \
 		--disable-csv \
 		--disable-curl \
@@ -253,6 +256,7 @@ confflags += \
 		--disable-dns \
 		--disable-dpdkevents \
 		--disable-dpdkstat \
+		--disable-dpdk_telemetry \
 		--disable-drbd \
 		--disable-email \
 		--disable-exec \
@@ -296,6 +300,7 @@ confflags += \
 		--disable-pinba \
 		--disable-postgresql \
 		--disable-powerdns \
+		--disable-procevent \
 		--disable-python \
 		--disable-redis \
 		--disable-rrdcached \
@@ -305,6 +310,7 @@ confflags += \
 		--disable-smart \
 		--disable-snmp \
 		--disable-snmp_agent \
+		--disable-sysevent \
 		--disable-teamspeak2 \
 		--disable-ted \
 		--disable-thermal \
@@ -323,6 +329,7 @@ confflags += \
 		--disable-write_redis \
 		--disable-write_riemann \
 		--disable-write_sensu \
+		--disable-write_stackdriver \
 		--disable-write_tsdb \
 		--disable-xencpu \
 		--disable-zookeeper
