@@ -470,6 +470,7 @@ binary-arch: build install-arch
 		-dDepends debian/collectd-core/usr/lib/collectd/rrdtool.so
 	dpkg-shlibdeps -Tdebian/collectd-core.substvars \
 		-dDepends debian/collectd-core/usr/sbin/* \
+		-dDepends debian/collectd-core/usr/lib/collectd/statsd.so \
 		-dSuggests debian/collectd-core/usr/lib/collectd/*.so
 	grep shlibs:Suggests debian/collectd-core.substvars \
 		| sed -e 's/shlibs:Suggests/shlibs:Recommends/' \
