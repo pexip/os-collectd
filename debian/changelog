@@ -1,3 +1,111 @@
+collectd (5.12.0-14) unstable; urgency=medium
+
+  * [aa8f170] Fix installing systemd service and init script.
+    Closes: ##1031672
+    Thanks to Thomas Goirand
+
+ -- Bernd Zeimetz <bzed@debian.org>  Mon, 20 Feb 2023 13:55:26 +0100
+
+collectd (5.12.0-13) unstable; urgency=medium
+
+  * [694f2c9] Revert "Disable nut plugin again."
+    This reverts commit e1c67e57f96bc4ad3e85f9a7a695742d36980d64.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Fri, 27 Jan 2023 09:08:10 +0100
+
+collectd (5.12.0-12) unstable; urgency=medium
+
+  * [d077f5d] Add lintian override for the java plugin.
+  * [6ebe59a] Remove removed debconf questions from translations
+  * [0c5f9dc] collectd-core: debconfig is used in postrm only.
+    Override lintian errors.
+  * [6be4222] Add package name to lintian overrides
+  * [bda81fa] Migrate to dh / debhelper compat 13
+  * [074299d] Fix building with python 3.11 (Closes: #1028146)
+  * [69e6716] Move dh_install to the appropriate place
+  * [45ea76f] Use debian/tmp for header/lib updates
+
+ -- Bernd Zeimetz <bzed@debian.org>  Mon, 16 Jan 2023 16:54:46 +0100
+
+collectd (5.12.0-11) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * [c8d0c73] Remove constraints unnecessary since buster
+    * Build-Depends: Drop versioned constraint on dpkg-dev, iptables-dev, libcurl4-gnutls-dev, libi2c-dev, liboping-dev, libriemann-client-dev, librrd-dev, libsnmp-dev, libvirt-dev, linux-libc-dev and protobuf-compiler.
+    * collectd-core: Drop versioned constraint on collectd in Replaces.
+    * collectd-utils: Drop versioned constraint on collectd in Replaces.
+    * libcollectdclient-dev: Drop versioned constraint on collectd-dev in Replaces.
+    * libcollectdclient-dev: Drop versioned constraint on collectd-dev in Breaks.
+    Changes-By: deb-scrub-obsolete
+
+  [ Gioele Barabucci ]
+  * [7cdaece] d/collectd.postinst: Remove test for ancient version.
+    Version 4.10.0-1 is older than the version in oldoldstable (5.7.1-1.1).
+    The test in `postinst` has thus been redundant for a long time and
+    can be removed.
+  * [f4c1e6f] d/collectd-core.{config,postinst}: Remove debconf questions about ancient versions.
+    Versions 3.x and 4.x are older than the version in oldoldstable (5.7.x),
+    released in 2017.
+    All tests connected to these debconf questions have thus been redundant
+    for a long time and can be removed.
+  * [1afaac8] d/watch: Update upstream URL (Closes: #964112)
+    This fixes the uscan issue:
+    ```
+    In debian/watch no matching files for watch line
+      https://github.com/collectd/collectd/tags /collectd/collectd/archive/collectd-([0-9.-]+)\.tar\.gz
+    ```
+    The lines are adapted the `dh-make` template.
+
+  [ Bernd Zeimetz ]
+  * [e1c67e5] Disable nut plugin again.
+    Various RC bugs for a longer time, not waiting for that.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Mon, 22 Aug 2022 17:24:43 +0200
+
+collectd (5.12.0-10) unstable; urgency=medium
+
+  * [343f857] Don't use local variables in global pointers
+    Closes: #1016187
+  * [254a859] Fix building with current nut version.
+  * [15098cc] Also fix local variables issue in write_prometheus
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 20 Aug 2022 22:38:49 +0200
+
+collectd (5.12.0-9) unstable; urgency=medium
+
+  * [577cd1f] Don't build mysql plugin on kfreebsd*
+  * [335185e] Disable libvirt plugin on sh4/ia64.
+    Keeping it disabled on kfreebsd*
+  * [6f2a0f7] Disable barometer/i2c on hurd
+  * [3f893cf] Also disable libvirt on alpha.
+  * [8482e2a] Don't build the xencpu plugin on i386.
+    Starting with xen version 4.16, xen is no longer built on the i386 architecture in Debian.
+    Thanks to Maximilian Engelhardt <maxi@daemonizer.de> (Closes: #1006250)
+
+ -- Bernd Zeimetz <bzed@debian.org>  Tue, 22 Feb 2022 01:17:43 +0100
+
+collectd (5.12.0-8) unstable; urgency=medium
+
+  [ Kentaro Hayashi ]
+  * [4a69d6e] Fix CGI::param error in collection3
+    ref. https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=982294
+    (Closes: #982294)
+
+  [ Bernd Zeimetz ]
+  * [c8207fc] Disable onewire until it is in testing again.
+  * [1379323] Drop hddtemp module.
+    hddtemp is going to be removed from the
+    archive.
+    Thanks to Aurelien Jarno (Closes: #1001954)
+  * [5d13bb9] Revert "Disable nut plugin for now."
+    This reverts commit 8846b4564bfca329542c8a2567e46e1b28448094.
+    Thanks to Michał Mirosław (Closes: #989805)
+  * [16b05e2] Update changelog to the version from unstable
+    The 5.12.0-7 upload was actually never pushed to the repository.
+  * [c6b9552] Remove patch~ file that was accidentally added some time ago.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Thu, 20 Jan 2022 15:40:42 +0100
+
 collectd (5.12.0-7) unstable; urgency=medium
 
   * Team upload.
