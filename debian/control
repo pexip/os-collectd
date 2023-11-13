@@ -4,17 +4,17 @@ Priority: optional
 Maintainer: Pexip AS <packaging@pexip.com>
 XSBC-Pexip-Original-Maintainer: Collectd Packaging Team <team+collectd@tracker.debian.org>
 XSBC-Pexip-Original-Uploaders: Sebastian Harl <tokkee@debian.org>, Marc Fournier <marc@bl.uem.li>, Bernd Zeimetz <bzed@debian.org>
-Build-Depends: debhelper-compat (= 10), dpkg-dev (>= 1.14.10), po-debconf, dh-strip-nondeterminism, dh-autoreconf,
+Build-Depends: debhelper-compat (= 13), po-debconf, dh-strip-nondeterminism, dh-autoreconf,
  bison, flex, autotools-dev, libltdl-dev, pkg-config,
-# default-libmysqlclient-dev,
+# default-libmysqlclient-dev [!kfreebsd-i386 !kfreebsd-amd64],
  intel-cmt-cat [amd64 i386],
- libiptc-dev (>= 1.8.4-2) [linux-any] | libip4tc-dev [linux-any] | iptables-dev (>= 1.4.3.2-2) [linux-any],
- libiptc-dev (>= 1.8.4-2) [linux-any] | libip6tc-dev [linux-any] | iptables-dev (>= 1.4.3.2-2) [linux-any],
+ libiptc-dev (>= 1.8.4-2) [linux-any] | libip4tc-dev [linux-any] | iptables-dev [linux-any],
+ libiptc-dev (>= 1.8.4-2) [linux-any] | libip6tc-dev [linux-any] | iptables-dev [linux-any],
  javahelper,
  kfreebsd-kernel-headers [kfreebsd-any],
 # libatasmart-dev [linux-any],
  libcap-dev [linux-any],
-# libcurl4-gnutls-dev (>= 7.18.2-5) | libcurl4-gnutls-dev (<= 7.18.2-1) | libcurl3-gnutls-dev,
+# libcurl4-gnutls-dev | libcurl4-gnutls-dev (<= 7.18.2-1) | libcurl3-gnutls-dev,
 # libdevstat-dev [kfreebsd-any],
 # libdbi0-dev,
 # libdpdk-dev [amd64 i386],
@@ -25,7 +25,7 @@ Build-Depends: debhelper-compat (= 10), dpkg-dev (>= 1.14.10), po-debconf, dh-st
 # libgrpc++-dev [amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x],
 # libgps-dev,
 # libhiredis-dev,
-# libi2c-dev (>= 4.0~),
+# libi2c-dev [!hurd-i386],
 # libkvm-dev [kfreebsd-any],
 # libldap2-dev,
 # liblua5.3-dev,
@@ -36,8 +36,7 @@ Build-Depends: debhelper-compat (= 10), dpkg-dev (>= 1.14.10), po-debconf, dh-st
  libmnl-dev [linux-any],
 # libnotify-dev,
 # libopenipmi-dev,
- liboping-dev (>= 0.3.3),
-# libow-dev,
+ liboping-dev,
  libpcap0.8-dev | libpcap-dev,
 # libperl-dev,
 # libpq-dev,
@@ -45,21 +44,22 @@ Build-Depends: debhelper-compat (= 10), dpkg-dev (>= 1.14.10), po-debconf, dh-st
 # libprotobuf-dev,
 # librabbitmq-dev,
 # librdkafka-dev,
-# libriemann-client-dev (>= 1.6.0),
- librrd-dev (>= 1.4~),
+# libriemann-client-dev,
+ librrd-dev,
 # libsensors-dev [linux-any],
-# libsnmp-dev (>= 5.4.2.1~dfsg-4~) | libsnmp-dev | libsnmp9-dev,
-# libsnmp-dev (>= 5.4.2.1~dfsg-4~) | perl (<< 5.10.1~rc2-1~),
+# libsnmp-dev | libsnmp-dev | libsnmp9-dev,
+# libsnmp-dev | perl (<< 5.10.1~rc2-1~),
 # libudev-dev [linux-any],
+# libupsclient-dev | libupsclient1-dev,
 # libvarnishapi-dev,
-# libvirt-dev (>= 0.4.0-6) [linux-any],
-# libxen-dev [amd64 arm64 armhf i386],
+# libvirt-dev [!kfreebsd-i386 !kfreebsd-amd64 !sh4 !ia64 !alpha],
+# libxen-dev [amd64 arm64 armhf],
 # libxml2-dev,
 # libyajl-dev,
- linux-libc-dev (>= 2.6.25-4) [linux-any] | linux-libc-dev (<< 2.6.25-1) [linux-any],
+ linux-libc-dev [linux-any] | linux-libc-dev (<< 2.6.25-1) [linux-any],
 # default-jdk [!hppa !sparc !kfreebsd-i386 !kfreebsd-amd64],
 # protobuf-c-compiler,
-# protobuf-compiler (>= 3.0.0),
+# protobuf-compiler,
 # protobuf-compiler-grpc [amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x],
 # python3-dev,
 # riemann-c-client,
@@ -82,12 +82,11 @@ Suggests: collectd-dev,
  librrds-perl, liburi-perl, libhtml-parser-perl, libregexp-common-perl,
  libconfig-general-perl, httpd-cgi,
 # services providing data that may be collected by collectd
- apache2, apcupsd, bind9, ceph, chrony, default-mysql-server, gpsd, hddtemp,
+ apache2, apcupsd, bind9, ceph, chrony, default-mysql-server, gpsd,
  iptables, ipvsadm, lm-sensors, mbmon, memcached, nginx, notification-daemon,
- openvpn, olsrd, pdns-server, postgresql, redis-server, slapd,
+ nut, openvpn, olsrd, pdns-server, postgresql, redis-server, slapd,
  time-daemon, varnish, zookeeper,
  ${shlibs:Suggests}, default-jre-headless
-Replaces: collectd (<< 4.8.2-1~)
 Description: statistics collection and monitoring daemon (core system)
  collectd is a small daemon which collects system information periodically and
  provides mechanisms to monitor and store the values in a variety of ways.
@@ -142,7 +141,6 @@ Description: statistics collection and monitoring daemon (core system)
    * Monitor gps related data through gpsd: gps
    * Send or receive values over the network using the gRPC framework: grpc
    * query data from Java processes using JMX: GenericJMX (Java based plugin)
-   * harddisk temperature: hddtemp
    * Report the number of used and free hugepages: hugepages
    * Intel Resource Director Technology statistics: intel_rdt
    * network traffic: interface
@@ -175,6 +173,7 @@ Description: statistics collection and monitoring daemon (core system)
    * send notification E-mails: notify_email
    * send notifications to nagios: notify_nagios
    * NTP daemon's local clock drift, offset to peers, etc.: ntpd
+   * UPS information: nut
    * Optimized Link State Routing daemon statistics: olsrd
    * OpenLDAP's cn=Monitor statistics: openldap
    * OpenVPN traffic and compression statistics: openvpn
@@ -258,7 +257,6 @@ Package: collectd-utils
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Recommends: collectd
-Replaces: collectd (<< 4.6.1-1~)
 Description: statistics collection and monitoring daemon (utilities)
  collectd is a small daemon which collects system information periodically and
  provides mechanisms to monitor and store the values in a variety of ways.
@@ -289,8 +287,6 @@ Package: libcollectdclient-dev
 Section: libdevel
 Architecture: any
 Depends: libcollectdclient1 (= ${binary:Version}), ${misc:Depends}
-Replaces: collectd-dev (<< 5.2.0-1)
-Breaks: collectd-dev (<< 5.2.0-1)
 Description: client library for collectd's control interface (development files)
  libcollectdclient provides an API to access the control interface provided by
  the unixsock plugin of collectd, a statistics collection and monitoring

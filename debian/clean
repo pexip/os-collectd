@@ -1,0 +1,5 @@
+debian/README.Debian.plugins
+src/*.1
+src/*.5
+debian/pkgconfig
+

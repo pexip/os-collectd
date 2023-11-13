@@ -1,0 +1,2 @@
+collectd-core: custom-library-search-path RUNPATH /usr/lib/jvm/default-java/*
+collectd-core: no-debconf-config
