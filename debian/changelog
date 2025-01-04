@@ -1,3 +1,127 @@
+collectd (5.12.0-22.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+
+  [ Maximilian Engelhardt ]
+  * Remove armhf from the libxen-dev Build-Depends.
+    (Closes: 1090989)
+
+ -- Niels Thykier <niels@thykier.net>  Sat, 04 Jan 2025 13:32:20 +0000
+
+collectd (5.12.0-22) unstable; urgency=medium
+
+  [ Luca Boccassi ]
+  * [0914fbf] Backport patch to fix FTBFS with dpdk 24.11 (Closes: #1087581)
+
+ -- Bernd Zeimetz <bzed@debian.org>  Fri, 15 Nov 2024 18:01:04 +0100
+
+collectd (5.12.0-21) unstable; urgency=medium
+
+  * [6f26c38] Enable grpc on all power architectures
+  * [5cae2db] Remove generated oconfig files on clean.
+    Thanks to Lucas Nussbaum (Closes: #1044119)
+  * [41f9e21] Change tests as they fail on ci.debian.net
+    run listval for now only.
+    we need to figure out why the tests fail on ci.debian.net only
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 09 Nov 2024 13:07:40 +0100
+
+collectd (5.12.0-20) unstable; urgency=medium
+
+  * [3072a6a] Let configure find JAVA_LDFLAGS/CPPFLAGS.
+    The included .mk file doesn't define the necessary variables on all
+    architectures.
+  * [388a0a6] Build with grpc on loong64 (Closes: #1085984)
+
+ -- Bernd Zeimetz <bzed@debian.org>  Thu, 24 Oct 2024 14:42:15 +0200
+
+collectd (5.12.0-19) unstable; urgency=medium
+
+  [ James Morris ]
+  * [393db23] Do not install files to /var/run.
+    Installing to /var/run causes issues during offline image building when
+    the directory is not available.
+    Debian policy states /var/run should not be included in packages
+    https://www.debian.org/doc/debian-policy/ch-opersys.html#run-and-run-lock
+
+  [ Bernd Zeimetz ]
+  * [ec32251] use curl-openssl instead of gnutls
+    Closes: #1081073
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sun, 20 Oct 2024 01:11:57 +0200
+
+collectd (5.12.0-18.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Invoke ./configure with --with-libgcrypt=/usr GCRYPT_LIBS=-lgcrypt
+    to sidestep ./configure's reliance on libgcrypt-config to locate
+    libgcrypt. Closes: #1070905
+
+ -- Andreas Metzler <ametzler@debian.org>  Sun, 07 Jul 2024 18:42:43 +0200
+
+collectd (5.12.0-18) unstable; urgency=medium
+
+  * [e3c9674] add .gitignore to ignore swp files
+  * [717b1df] Add -std=c++14 for CXX.
+    Thanks to Sebastian Ramacher (Closes: #1068580)
+  * [4f7b1b0] Patch configure.ac to handle c++14
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 20 Apr 2024 00:49:01 +0200
+
+collectd (5.12.0-17.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Rename libraries for 64-bit time_t transition.  Closes: #1062094
+
+ -- Steve Langasek <vorlon@debian.org>  Wed, 28 Feb 2024 17:04:03 +0000
+
+collectd (5.12.0-17) unstable; urgency=medium
+
+  * [lots of commits] adding some basic autopkgtest
+    - run daemon
+    - get values
+    - check that basic plugins work
+  * [791b61a] add .gitignore to ignore swp files
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sun, 04 Feb 2024 21:09:33 +0100
+
+collectd (5.12.0-16) unstable; urgency=medium
+
+  * [3d4bf71] Revert "Disable onewire until it is in testing again."
+    This reverts commit c8207fc7db2cf4fd7c7d342bb28e9d9995011233.
+  * [f297b98] grpc is available on loong64 powerpc ppc64 now.
+  * [360495c] No mongodb on loong64
+  * [b75ac03] Log dpkg-architecture -l in case of failures.
+  * [a975f51] Make debug output a bit readable
+  * [339ab70] Disable varnish plugin.
+    Thanks to Paul Gevers (Closes: #1060776)
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sun, 04 Feb 2024 16:26:58 +0100
+
+collectd (5.12.0-15) unstable; urgency=medium
+
+  [ Bernd Zeimetz ]
+  * [b856351] Fix lintian error:
+    E: collectd-core: depends-on-obsolete-package Depends: lsb-base
+
+  [ Samuel Thibault ]
+  * [c052c93] d/control,rules: Fix arch filtering
+
+  [ Luca Boccassi ]
+  * [da43466] Disable dpdk plugin on i386
+    libdpdk-dev will no longer build for i386, disable it (Closes: #1057146)
+
+  [ Bernd Zeimetz ]
+  * [451bab7] Update JAVA_LIBDIR for current openjdks
+  * [48c6d15] Use include from javahelper to retrieve java directories.
+  * [b8fd49c] Don't build java plugin on i368.
+    Linking libjvm fails due to missing symbols in libjvm. (Closes: #1057712)
+  * [e1162da] Fix copy&paste error, we check the arch, not os
+  * [08c5029] Add libjansson-dev as build-dependency
+    (was magically pulled in by libdpdk-dev before).
+
+ -- Bernd Zeimetz <bzed@debian.org>  Thu, 07 Dec 2023 15:35:28 +0100
+
 collectd (5.12.0-14) unstable; urgency=medium
 
   * [aa8f170] Fix installing systemd service and init script.

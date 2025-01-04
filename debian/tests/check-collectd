@@ -1,0 +1,26 @@
+#!/bin/bash
+set -e
+
+# service should be enabled and active after install
+echo "Check service being active"
+systemctl is-enabled collectd.service
+systemctl is-active collectd.service
+
+echo "copying config"
+cp -f "${0}.conf" /etc/collectd/collectd.conf
+
+echo "waiting for collectd restart"
+systemctl restart collectd
+sleep 5
+
+echo "putting same fake values into collectd"
+for i in $(seq 1 5); do
+    sleep 2
+    collectdctl -s /run/collectd-unixsock putval autotest/check-collectd/counter-date interval=2 "N:$(date +%s).0"
+done
+
+echo "getting it back"
+collectdctl -s /run/collectd-unixsock getval autotest/check-collectd/counter-date
+
+echo "running listval only for now"
+collectdctl -s /run/collectd-unixsock listval

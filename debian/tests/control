@@ -1,0 +1,3 @@
+Tests: check-collectd
+Depends: collectd, collectd-utils, collectd-core, systemd, grep, curl
+Restrictions: needs-root, isolation-container
