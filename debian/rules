@@ -9,6 +9,7 @@
 # These are used for cross-compiling and for saving the configure script
 # from having to guess our platform (since we know it already)
 include /usr/share/dpkg/architecture.mk
+include /usr/share/javahelper/java-vars.mk
 
 export DEB_BUILD_MAINT_OPTIONS=hardening=+all
 
@@ -42,18 +43,11 @@ ifneq (,$(filter $(DEB_HOST_ARCH), armel mips mipsel powerpc))
   LDFLAGS += -Wl,--no-as-needed -latomic -Wl,--as-needed
 endif
 
-# The archdir map has been copied from openjdk-6's debian/rules.
-JAVA_ARCHDIR = $(shell /usr/share/javahelper/java-arch.sh $(DEB_BUILD_ARCH))
-ifeq (,$(JAVA_ARCHDIR))
-	JAVA_ARCHDIR = $(DEB_BUILD_ARCH)
-endif
-JAVA_HOME = /usr/lib/jvm/default-java
-JAVA_LIBDIR = $(JAVA_HOME)/jre/lib/$(JAVA_ARCHDIR)/server
 
 JAVAC = $(JAVA_HOME)/bin/javac
 JAR = $(JAVA_HOME)/bin/jar
-JAVA_CPPFLAGS = -I$(JAVA_HOME)/include
-JAVA_LDFLAGS = -L$(JAVA_LIBDIR) -Wl,-rpath -Wl,$(JAVA_LIBDIR)
+#JAVA_CPPFLAGS = -I$(JAVA_HOME)/include
+#JAVA_LDFLAGS = -L$(JVM_SERVER_DIR) -Wl,-rpath -Wl,$(JVM_SERVER_DIR)
 
 confflags = --host=$(DEB_HOST_GNU_TYPE) \
 			--build=$(DEB_BUILD_GNU_TYPE) --prefix=/usr \
@@ -63,10 +57,27 @@ confflags = --host=$(DEB_HOST_GNU_TYPE) \
 			--without-libstatgrab \
 			--disable-static \
 			--disable-silent-rules \
-			--enable-all-plugins
+			--enable-all-plugins \
+			--with-libgcrypt=/usr \
+			GCRYPT_LIBS=-lgcrypt
+
+# java doesn't link on i386. (see blocking bug for #1057712)
+ifeq ($(DEB_HOST_ARCH),i386)
+	confflags += \
+		--disable-java
+endif
+
+# no mongodb on loong64
+ifeq ($(DEB_HOST_ARCH),loong64)
+	confflags += \
+		--disable-write_mongodb
+endif
 
 # disable tokyotyrant (#980331)
 confflags += --disable-tokyotyrant
+
+# varnish is broken again.
+confflags += --disable-varnish
 
 # These plugins do not provide any functionality under Linux.
 # MacOS only (requires IO Kit):
@@ -116,12 +127,8 @@ confflags += --disable-gpu_nvidia
 
 
 # ganglia FTBS, disable it for now
-# see #964399
+# see #1000041
 confflags += --disable-gmond
-
-
-# owfs ftbfs
-confflags += --disable-onewire
 
 # hddtemp will be remove from debian
 # #1001954
@@ -148,7 +155,7 @@ ifeq ($(DEB_HOST_ARCH_OS),kfreebsd)
 		--disable-vserver
 endif
 
-# These plugins art FreeBSD-specific.
+# These plugins are FreeBSD-specific.
 ifneq ($(DEB_HOST_ARCH_OS),kfreebsd)
 	confflags += \
 		--disable-pf \
@@ -160,6 +167,8 @@ endif
 # intel only stuff
 ifeq (,$(filter $(DEB_HOST_ARCH),amd64 i386))
     confflags += --disable-capabilities
+endif
+ifeq (,$(filter $(DEB_HOST_ARCH),amd64))
     confflags += --disable-dpdk_telemetry
 endif
 
@@ -200,25 +209,25 @@ ifeq ($(DEB_HOST_ARCH_OS),kfreebsd)
 endif
 
 # Missing build-deps on sh4
-ifeq ($(DEB_HOST_ARCH_OS),sh4)
+ifeq ($(DEB_HOST_ARCH),sh4)
 	confflags += \
 		--disable-virt
 endif
 
 # Missing build-deps on ia64
-ifeq ($(DEB_HOST_ARCH_OS),ia64)
+ifeq ($(DEB_HOST_ARCH),ia64)
 	confflags += \
 		--disable-virt
 endif
 
 # Missing build-deps on alpha
-ifeq ($(DEB_HOST_ARCH_OS),alpha)
+ifeq ($(DEB_HOST_ARCH),alpha)
 	confflags += \
 		--disable-virt
 endif
 
 # Missing build-deps on hurd
-ifeq ($(DEB_HOST_ARCH_OS),hurd-i386)
+ifeq ($(DEB_HOST_ARCH_OS),hurd)
 	confflags += \
 		--disable-barometer
 endif
@@ -226,13 +235,16 @@ endif
 # These plugins are Intel-hardware specific.
 ifeq (,$(filter amd64 i386, $(DEB_HOST_ARCH)))
 	confflags += \
-		--disable-dpdkevents \
-		--disable-dpdkstat \
 		--disable-intel_pmu \
 		--disable-intel_rdt \
 		--disable-mcelog \
 		--disable-mic \
 		--disable-turbostat
+endif
+ifeq (,$(filter amd64, $(DEB_HOST_ARCH)))
+	confflags += \
+		--disable-dpdkevents \
+		--disable-dpdkstat
 endif
 
 # the pcie_errors plugin does not work on all kinds of hardware
@@ -242,7 +254,7 @@ ifeq (,$(filter amd64 arm64 armel armhf i386 mips64el mipsel ppc64el, $(DEB_HOST
 endif
 
 # This plugin is x86 and arm specific.
-ifeq (,$(filter amd64 arm64 armhf, $(DEB_HOST_ARCH)))
+ifeq (,$(filter amd64 arm64, $(DEB_HOST_ARCH)))
 	confflags += \
 		--disable-xencpu
 endif
@@ -259,8 +271,8 @@ ifneq (,$(filter hppa sparc, $(DEB_HOST_ARCH)))
 	confflags += --disable-java
 endif
 
-# gRPC is only available on x86, arm, ppc.
-ifeq (,$(filter amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x, $(DEB_HOST_ARCH)))
+# gRPC is not available everywhere.
+ifeq (,$(filter amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x loong64 powerpc ppc64, $(DEB_HOST_ARCH)))
 	confflags += --disable-grpc
 endif
 
@@ -374,7 +386,16 @@ override_dh_auto_configure:
 	JAVAC="$(JAVAC)" JAR="$(JAR)" JAVA_CPPFLAGS="$(JAVA_CPPFLAGS)" \
 	JAVA_LDFLAGS="$(JAVA_LDFLAGS)" \
 	./configure $(confflags) \
-		|| ( status=$$?; cat config.log; exit $$status )
+		|| ( status=$$?; \
+				echo -e '\n\n\n\n\n\n'; \
+				printf '%.0s-' {1..100}; \
+				echo;  \
+				dpkg-architecture -l; \
+				echo -e '\n\n\n\n\n\n'; \
+				printf '%.0s-' {1..100}; \
+				echo; \
+				cat config.log; \
+				exit $$status )
 
 override_dh_auto_test:
 	dh_auto_test
@@ -384,13 +405,14 @@ override_dh_auto_test:
 override_dh_clean:
 	dh_clean
 	debconf-updatepo
+	rm -f src/liboconfig/parser.c src/liboconfig/parser.h src/liboconfig/scanner.c
 
 override_dh_install:
 	rm -f debian/tmp/usr/lib/collectd/*.la
 	rm -f debian/tmp/usr/lib/libcollectdclient.la
 	rm -f debian/tmp/etc/collectd.conf
 
-	
+
 	set -e ;\
 		find src  -path src/libcollectdclient -prune -o -path src/liboconfig -prune -o -name '*.h'  -print | while read i; do \
 			d=$$(echo "$${i}" | sed 's,^src,debian/tmp/usr/include/collectd/core,') ;\
@@ -409,7 +431,7 @@ override_dh_install:
 		done )
 	perl ./debian/bin/gen_plugin_deps.pl
 	dh_install
-	
+
 
 override_dh_installexamples:
 	dh_installexamples -i contrib/examples/myplugin.c \
@@ -447,4 +469,3 @@ override_dh_installsystemd:
 
 override_dh_installinit:
 	dh_installinit -pcollectd-core --name=collectd
-

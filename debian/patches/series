@@ -7,3 +7,5 @@ nagios-debian-paths.patch
 fix-smart-test
 cgi-param-in-list-context.patch
 python311_ftbfs_fix.patch
+use_c++_std_14_for_grpc.patch
+dpdk-2411.patch
