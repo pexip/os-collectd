@@ -1,3 +1,10 @@
+collectd (5.12.0-23) unstable; urgency=medium
+
+  * Team upload.
+  * No change rebuild for reproduce.d.n
+
+ -- Jochen Sprickerhof <jspricke@debian.org>  Mon, 05 May 2025 07:01:07 +0200
+
 collectd (5.12.0-22.1+pexip25u1) pexip-trixie; urgency=medium
 
   * Initial trixie build
