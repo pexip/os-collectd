@@ -1,3 +1,24 @@
+collectd (5.12.0-26) unstable; urgency=medium
+
+  * [f830834] debian/rules went missing from the last upload.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 07 Jun 2025 19:08:05 +0200
+
+collectd (5.12.0-25) unstable; urgency=medium
+
+  * [fadf6af] Also integrate the changes from -22.1.
+    Unfortunately they never made it into salsa or into the bug tracker and
+    got lost on the way.
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 07 Jun 2025 17:56:53 +0200
+
+collectd (5.12.0-24) unstable; urgency=medium
+
+  * [a977729] curl_easy_setopt: always pass long as a parameter.
+    Thanks to Santiago Vila (Closes: #1107407)
+
+ -- Bernd Zeimetz <bzed@debian.org>  Sat, 07 Jun 2025 15:22:54 +0200
+
 collectd (5.12.0-23) unstable; urgency=medium
 
   * Team upload.

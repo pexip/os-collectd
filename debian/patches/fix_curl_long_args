@@ -1,0 +1,39 @@
+Index: collectd/src/curl.c
+===================================================================
+--- collectd.orig/src/curl.c
++++ collectd/src/curl.c
+@@ -346,7 +346,7 @@ static int cc_page_init_curl(web_page_t
+   curl_easy_setopt(wp->curl, CURLOPT_ERRORBUFFER, wp->curl_errbuf);
+   curl_easy_setopt(wp->curl, CURLOPT_FOLLOWLOCATION, 1L);
+   curl_easy_setopt(wp->curl, CURLOPT_MAXREDIRS, 50L);
+-  curl_easy_setopt(wp->curl, CURLOPT_IPRESOLVE, wp->address_family);
++  curl_easy_setopt(wp->curl, CURLOPT_IPRESOLVE, (long)wp->address_family);
+ 
+   if (wp->user != NULL) {
+ #ifdef HAVE_CURLOPT_USERNAME
+Index: collectd/src/curl_json.c
+===================================================================
+--- collectd.orig/src/curl_json.c
++++ collectd/src/curl_json.c
+@@ -583,7 +583,7 @@ static int cj_init_curl(cj_t *db) /* {{{
+   curl_easy_setopt(db->curl, CURLOPT_ERRORBUFFER, db->curl_errbuf);
+   curl_easy_setopt(db->curl, CURLOPT_FOLLOWLOCATION, 1L);
+   curl_easy_setopt(db->curl, CURLOPT_MAXREDIRS, 50L);
+-  curl_easy_setopt(db->curl, CURLOPT_IPRESOLVE, db->address_family);
++  curl_easy_setopt(db->curl, CURLOPT_IPRESOLVE, (long)db->address_family);
+ 
+   if (db->user != NULL) {
+ #ifdef HAVE_CURLOPT_USERNAME
+Index: collectd/src/curl_xml.c
+===================================================================
+--- collectd.orig/src/curl_xml.c
++++ collectd/src/curl_xml.c
+@@ -737,7 +737,7 @@ static int cx_init_curl(cx_t *db) /* {{{
+   curl_easy_setopt(db->curl, CURLOPT_ERRORBUFFER, db->curl_errbuf);
+   curl_easy_setopt(db->curl, CURLOPT_FOLLOWLOCATION, 1L);
+   curl_easy_setopt(db->curl, CURLOPT_MAXREDIRS, 50L);
+-  curl_easy_setopt(db->curl, CURLOPT_IPRESOLVE, db->address_family);
++  curl_easy_setopt(db->curl, CURLOPT_IPRESOLVE, (long)db->address_family);
+ 
+   if (db->user != NULL) {
+ #ifdef HAVE_CURLOPT_USERNAME
