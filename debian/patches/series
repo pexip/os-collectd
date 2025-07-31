@@ -1,3 +1,4 @@
+fix_curl_long_args
 fix-nut-integer-sizes
 fix-storing-local-variables
 rrd_filter_path.patch
