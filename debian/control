@@ -73,7 +73,7 @@ Homepage: https://collectd.org/
 Vcs-Git: https://salsa.debian.org/debian/pkg-collectd.git
 Vcs-Browser: https://salsa.debian.org/debian/pkg-collectd
 XS-Pexip-Upstream: http://deb.debian.org/debian/ trixie
-X-Pexip-Note: collectd in PexOS is configured to remove the majority of
+XS-Pexip-Note: collectd in PexOS is configured to remove the majority of
  plugins.  These are not required in the PexOS environment and removing
  them improves our security posture and minimises the packages which
  need to be shipped.
